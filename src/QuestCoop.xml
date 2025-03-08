@@ -1,0 +1,30 @@
+<Ui xmlns="http://www.blizzard.com/wow/ui/">
+    <Script file="QuestCoop.lua"/>
+    <Frame name="QuestCoopFrame">
+        <Frames>
+            <Button name="HideQuestsButton" inherits="UIPanelButtonTemplate">
+                <Size>
+                    <AbsDimension x="120" y="30"/>
+                </Size>
+                <Anchors>
+                    <Anchor point="CENTER">
+                        <Offset>
+                            <AbsDimension x="0" y="0"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Hide Quests"/>
+                    </Layer>
+                </Layers>
+                <Scripts>
+                    <OnClick>
+                        HideAllQuests()
+                    </OnClick>
+                </Scripts>
+                <Visible>true</Visible>
+            </Button>
+        </Frames>
+    </Frame>
+</Ui>

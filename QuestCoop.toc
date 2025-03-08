@@ -1,0 +1,9 @@
+## Interface: 110002
+## Title: Quest Coop
+## Notes: Hides all quests from the quest tracker
+## Author: YourName
+## SavedVariables: QuestCoopDB
+
+
+src/QuestCoop.lua
+src/QuestCoop.xml
