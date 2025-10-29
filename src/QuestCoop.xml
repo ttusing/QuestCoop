@@ -1,7 +1,7 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/">
-    <Script file="QuestCoop.lua"/>
     <Frame name="QuestCoopFrame">
         <Frames>
+            <!-- BackdropTemplate removed temporarily for debugging button creation -->
             <Button name="HideQuestsButton" inherits="UIPanelButtonTemplate">
                 <Size>
                     <AbsDimension x="120" y="30"/>
@@ -21,6 +21,30 @@
                 <Scripts>
                     <OnClick>
                         HideAllQuests()
+                    </OnClick>
+                </Scripts>
+                <Visible>true</Visible>
+            </Button>
+            <!-- BackdropTemplate removed temporarily for debugging button creation -->
+            <Button name="PrintQuestIDsButton" inherits="UIPanelButtonTemplate">
+                <Size>
+                    <AbsDimension x="160" y="30"/>
+                </Size>
+                <Anchors>
+                    <Anchor point="CENTER">
+                        <Offset>
+                            <AbsDimension x="0" y="-40"/>
+                        </Offset>
+                    </Anchor>
+                </Anchors>
+                <Layers>
+                    <Layer level="ARTWORK">
+                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Print Quest IDs"/>
+                    </Layer>
+                </Layers>
+                <Scripts>
+                    <OnClick>
+                        PrintQuestIDs()
                     </OnClick>
                 </Scripts>
                 <Visible>true</Visible>
