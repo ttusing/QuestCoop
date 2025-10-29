@@ -39,6 +39,41 @@ local function MakeDraggable(frame, key)
     end)
 end
 
+-- Quest ID window (created lazily)
+local questWindow, questScrollFrame, questScrollChild
+local function CreateQuestWindow()
+    if questWindow then return end
+    questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
+    questWindow:SetSize(400, 300)
+    questWindow:SetPoint("CENTER")
+    questWindow:SetMovable(true)
+    questWindow:EnableMouse(true)
+    questWindow:RegisterForDrag("LeftButton")
+    questWindow:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    questWindow:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    questWindow:SetBackdrop({bgFile = "Interface/Tooltips/UI-Tooltip-Background", edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 }})
+    questWindow:SetBackdropColor(0,0,0,0.85)
+    questWindow:Hide()
+
+    local title = questWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -10)
+    title:SetText("Quest IDs")
+
+    local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", 0, 0)
+
+    questScrollFrame = CreateFrame("ScrollFrame", "QuestCoopQuestScroll", questWindow, "UIPanelScrollFrameTemplate")
+    questScrollFrame:SetPoint("TOPLEFT", 16, -40)
+    questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
+
+    questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
+    questScrollChild:SetSize(360, 1) -- width roughly scrollframe width minus scrollbar
+    questScrollFrame:SetScrollChild(questScrollChild)
+    questScrollChild.lines = {}
+
+    Log("QuestWindow created")
+end
+
 -- Function to hide all quests
 function HideAllQuests()
     Log("HideAllQuests START")
@@ -82,21 +117,45 @@ end
 -- Function to print current quest IDs
 function PrintQuestIDs()
     Log("PrintQuestIDs START")
-    print("QuestCoop: Listing current quest IDs...")
+    CreateQuestWindow()
+    local lines = {}
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
+    local shiftDown = IsShiftKeyDown and IsShiftKeyDown()
+    if shiftDown then
+        print("QuestCoop: (Shift) Also printing quest IDs to chat...")
+    end
     for i = 1, numEntries do
         local questInfo = C_QuestLog.GetInfo(i)
         Log("PrintQuestIDs loop", i, questInfo and questInfo.title, questInfo and questInfo.isHeader)
         if questInfo and not questInfo.isHeader then
             local questID = questInfo.questID
             if questID then
-                print(string.format("QuestCoop: %s => %d", questInfo.title or "(no title)", questID))
-                Log("PrintQuestIDs printed", questID)
+                local line = string.format("%d - %s", questID, questInfo.title or "(no title)")
+                table.insert(lines, line)
+                Log("PrintQuestIDs line", line)
+                if shiftDown then print("QuestCoop:", line) end
             end
         end
     end
-    print("QuestCoop: Finished listing quest IDs")
+    -- Clear previous lines
+    for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
+    wipe(questScrollChild.lines)
+    local yOff = -2
+    for idx, text in ipairs(lines) do
+        local fs = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        fs:SetPoint("TOPLEFT", 0, yOff)
+        fs:SetJustifyH("LEFT")
+        fs:SetText(text)
+        table.insert(questScrollChild.lines, fs)
+        local h = fs:GetStringHeight() or 12
+        yOff = yOff - h - 2
+    end
+    local totalHeight = (-yOff) + 4
+    questScrollChild:SetHeight(totalHeight)
+    Log("QuestWindow lines populated", #lines, "height", totalHeight)
+    questWindow:Show()
+    Log("QuestWindow populated", #lines)
     Log("PrintQuestIDs END")
 end
 

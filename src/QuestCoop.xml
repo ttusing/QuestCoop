@@ -23,7 +23,6 @@
                         HideAllQuests()
                     </OnClick>
                 </Scripts>
-                <Visible>true</Visible>
             </Button>
             <!-- BackdropTemplate removed temporarily for debugging button creation -->
             <Button name="PrintQuestIDsButton" inherits="UIPanelButtonTemplate">
@@ -47,7 +46,6 @@
                         PrintQuestIDs()
                     </OnClick>
                 </Scripts>
-                <Visible>true</Visible>
             </Button>
         </Frames>
     </Frame>
