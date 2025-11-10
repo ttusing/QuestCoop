@@ -1,4 +1,107 @@
 local addonName, addon = ...
+local ADDON_PREFIX = addonName or "QuestCoop"
+local ADDON_VERSION = "1"
+
+-- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
+local partyQuestStates = {}
+local function ShortName(name)
+    if not name then return "?" end
+    return name:match("^[^%-]+") or name
+end
+
+local function EnsurePrefix()
+    if C_ChatInfo and C_ChatInfo.RegisterAddonMessagePrefix then
+        C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
+    end
+end
+
+local function BuildLocalSnapshot()
+    local snapshot = {}
+    local numEntries = C_QuestLog.GetNumQuestLogEntries()
+    for i=1,numEntries do
+        local qi = C_QuestLog.GetInfo(i)
+        if qi and not qi.isHeader and qi.questID then
+            local tracked = false
+            if C_QuestLog.GetQuestWatchType then
+                tracked = C_QuestLog.GetQuestWatchType(qi.questID) ~= nil
+            elseif IsQuestWatched then
+                local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(qi.questID)
+                if logIndex then tracked = IsQuestWatched(logIndex) end
+            end
+            local ready = false
+            if C_QuestLog.IsComplete then ready = C_QuestLog.IsComplete(qi.questID)
+            elseif IsQuestComplete then ready = IsQuestComplete(qi.questID)
+            elseif qi.isComplete ~= nil then ready = qi.isComplete end
+            snapshot[qi.questID] = {tracked=tracked, ready=ready, has=true, title=qi.title or "(no title)"}
+        end
+    end
+    return snapshot
+end
+
+local function SerializeSnapshot(snapshot)
+    -- Format: SNAP|version|qid,tracked,ready;qid,tracked,ready;...
+    local parts = {"SNAP", ADDON_VERSION}
+    local entries = {}
+    for qid,data in pairs(snapshot) do
+        table.insert(entries, string.format("%d,%d,%d", qid, data.tracked and 1 or 0, data.ready and 1 or 0))
+    end
+    table.insert(parts, table.concat(entries, ";"))
+    return table.concat(parts, "|")
+end
+
+local function SendSnapshot()
+    if not IsInGroup() then return end
+    EnsurePrefix()
+    local snapshot = BuildLocalSnapshot()
+    local msg = SerializeSnapshot(snapshot)
+    if #msg > 240 then
+        -- Fallback: send in chunks if very large (edge case) - simple split by ';'
+        local header = "SNAP_PART|"..ADDON_VERSION
+        local current = {}
+        local length = #header
+        for qid,data in pairs(snapshot) do
+            local seg = string.format("%d,%d,%d;", qid, data.tracked and 1 or 0, data.ready and 1 or 0)
+            if length + #seg > 240 then
+                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+                current = {}
+                length = #header
+            end
+            table.insert(current, seg)
+            length = length + #seg
+        end
+        if #current > 0 then
+            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+        end
+    else
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
+    end
+end
+
+local function ApplySnapshot(fromPlayer, snapshotStr)
+    partyQuestStates[fromPlayer] = partyQuestStates[fromPlayer] or {}
+    for seg in snapshotStr:gmatch("[^;]+") do
+        local qid, tracked, ready = seg:match("^(%d+),(%d),(%d)$")
+        if qid then
+            qid = tonumber(qid)
+            partyQuestStates[fromPlayer][qid] = partyQuestStates[fromPlayer][qid] or {}
+            local entry = partyQuestStates[fromPlayer][qid]
+            entry.has = true
+            entry.tracked = tracked == "1"
+            entry.ready = ready == "1"
+            -- Title will be filled lazily from our own view when building tooltip
+        end
+    end
+end
+
+local function CleanupMissing(fromPlayer, snapshotTable)
+    local current = partyQuestStates[fromPlayer]
+    if not current then return end
+    for qid,_ in pairs(current) do
+        if not snapshotTable[qid] then
+            current[qid] = nil -- remove quests no longer present
+        end
+    end
+end
 
 -- Debug flag
 local DEBUG = true
@@ -281,7 +384,22 @@ function PrintQuestIDs(silentRefresh)
             if row.tag and row.tag.tagName then
                 GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
             end
-            GameTooltip:AddLine("Tracked: " .. row.tracked .. "  Ready: " .. row.ready, 0.7,0.7,0.7)
+            -- Party member aggregation
+            local hasMembers, trackedMembers, readyMembers = {}, {}, {}
+            for player,quests in pairs(partyQuestStates) do
+                local q = quests[row.id]
+                if q and q.has then table.insert(hasMembers, ShortName(player)) end
+                if q and q.tracked then table.insert(trackedMembers, ShortName(player)) end
+                if q and q.ready then table.insert(readyMembers, ShortName(player)) end
+            end
+            local function fmt(list)
+                if #list == 0 then return "None" end
+                table.sort(list)
+                return table.concat(list, ", ")
+            end
+            GameTooltip:AddLine("Has: " .. fmt(hasMembers), 0.7,0.9,0.7)
+            GameTooltip:AddLine("Tracking: " .. fmt(trackedMembers), 0.7,0.7,0.9)
+            GameTooltip:AddLine("Ready: " .. fmt(readyMembers), 0.9,0.7,0.7)
             GameTooltip:Show()
         end)
         rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -309,6 +427,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         print("QuestCoop: PLAYER_LOGIN event detected") -- Debug message
         Log("Handle PLAYER_LOGIN")
+        EnsurePrefix()
         
         -- Set up click handler for the button defined in XML
     if not QuestCoopDB then QuestCoopDB = {} end
@@ -383,6 +502,24 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
         Log("AutoRefresh event", event)
         RefreshQuestWindowIfVisible()
+        SendSnapshot()
+    end
+    if event == "GROUP_ROSTER_UPDATE" then
+        Log("Group roster changed")
+        SendSnapshot() -- share current state when group changes
+    end
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, message, channel, sender = ...
+        if prefix == ADDON_PREFIX and sender ~= UnitName("player") then
+            local msgType, version, payload = strsplit("|", message)
+            if msgType == "SNAP" and payload then
+                ApplySnapshot(sender, payload)
+                RefreshQuestWindowIfVisible()
+            elseif msgType == "SNAP_PART" and payload then
+                ApplySnapshot(sender, payload) -- partial sequences accumulate
+                RefreshQuestWindowIfVisible()
+            end
+        end
     end
 end)
 
@@ -391,4 +528,6 @@ frame:RegisterEvent("QUEST_ACCEPTED")
 frame:RegisterEvent("QUEST_REMOVED")
 frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
+frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+frame:RegisterEvent("CHAT_MSG_ADDON")
 Log("Registered quest update events")
