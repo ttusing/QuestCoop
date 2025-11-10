@@ -74,6 +74,13 @@ local function CreateQuestWindow()
     Log("QuestWindow created")
 end
 
+-- Internal helper to refresh quest window if shown (silent)
+local function RefreshQuestWindowIfVisible()
+    if not questWindow or not questWindow:IsShown() then return end
+    -- Call PrintQuestIDs but without shift printing and without forcing visibility changes beyond refresh.
+    PrintQuestIDs(true) -- pass silent flag
+end
+
 -- Function to hide all quests
 function HideAllQuests()
     Log("HideAllQuests START")
@@ -115,15 +122,17 @@ function HideAllQuests()
 end
 
 -- Function to print current quest IDs
-function PrintQuestIDs()
+-- PrintQuestIDs(silentRefresh)
+-- When silentRefresh is true, we don't echo to chat even if shift is down.
+function PrintQuestIDs(silentRefresh)
     Log("PrintQuestIDs START")
     CreateQuestWindow()
     -- Build structured rows instead of a single concatenated string per quest.
     local rows = {}
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
-    local shiftDown = IsShiftKeyDown and IsShiftKeyDown()
-    if shiftDown then
+    local shiftDown = IsShiftKeyDown and IsShiftKeyDown() and not silentRefresh
+    if shiftDown and not silentRefresh then
         print("QuestCoop: (Shift) Also printing quest IDs to chat...")
     end
     for i = 1, numEntries do
@@ -147,7 +156,7 @@ function PrintQuestIDs()
                 table.insert(rows, {id = questID, title = title, tracked = trackText})
                 local chatLine = string.format("%d - %s (%s)", questID, title, trackText)
                 Log("PrintQuestIDs row", chatLine)
-                if shiftDown then print("QuestCoop:", chatLine) end
+                if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
             end
         end
     end
@@ -284,4 +293,16 @@ frame:SetScript("OnEvent", function(self, event, ...)
             Log("PrintQuestIDsButton missing")
         end
     end
+    -- Auto-refresh triggers
+    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
+        Log("AutoRefresh event", event)
+        RefreshQuestWindowIfVisible()
+    end
 end)
+
+-- Register quest-related events for auto refresh
+frame:RegisterEvent("QUEST_ACCEPTED")
+frame:RegisterEvent("QUEST_REMOVED")
+frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
+frame:RegisterEvent("QUEST_LOG_UPDATE")
+Log("Registered quest update events")
