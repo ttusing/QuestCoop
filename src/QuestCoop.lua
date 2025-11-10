@@ -193,6 +193,7 @@ function PrintQuestIDs(silentRefresh)
                 else
                     local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
                     local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
+                    Log("Quest data", questID, "tag:", questTagInfo and questTagInfo.tagName or "nil", "category:", detailedCategory, "zone:", zoneOrSort)
                     table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, zoneOrSort = zoneOrSort, questInfo = questInfo})
                     local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                     Log("PrintQuestIDs row", chatLine)
