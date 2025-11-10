@@ -15,7 +15,7 @@
                 </Anchors>
                 <Layers>
                     <Layer level="ARTWORK">
-                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Print Quest IDs"/>
+                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Quest Co-op"/>
                     </Layer>
                 </Layers>
                 <Scripts>

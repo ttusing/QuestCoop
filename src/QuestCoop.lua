@@ -122,7 +122,7 @@ local function CreateQuestWindow()
     questWindow:Hide()
 
     local title = questWindow:CreateFontString(nil,"OVERLAY","GameFontNormalLarge")
-    title:SetPoint("TOP",0,-10); title:SetText("Quest IDs")
+    title:SetPoint("TOP",0,-10); title:SetText("Quest Co-op")
     local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT",0,0)
 
