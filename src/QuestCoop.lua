@@ -191,9 +191,20 @@ function PrintQuestIDs(silentRefresh)
                 if isHidden then
                     Log("Skipping hidden quest", questID, title)
                 else
+                    -- Debug: print all questInfo fields
+                    Log("=== QUEST DEBUG ===", questID, title)
+                    Log("  questTagInfo:", questTagInfo and "exists" or "NIL")
+                    if questTagInfo then
+                        Log("    tagName:", questTagInfo.tagName or "nil")
+                        Log("    tagID:", questTagInfo.tagID or "nil")
+                    end
+                    Log("  questInfo.header:", questInfo.header or "nil")
+                    Log("  questInfo.zoneOrSort:", questInfo.zoneOrSort or "nil")
+                    Log("  questInfo.campaignID:", questInfo.campaignID or "nil")
+                    
                     local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
                     local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
-                    Log("Quest data", questID, "tag:", questTagInfo and questTagInfo.tagName or "nil", "category:", detailedCategory, "zone:", zoneOrSort)
+                    Log("  FINAL zoneOrSort:", zoneOrSort, "category:", detailedCategory)
                     table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, zoneOrSort = zoneOrSort, questInfo = questInfo})
                     local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                     Log("PrintQuestIDs row", chatLine)
