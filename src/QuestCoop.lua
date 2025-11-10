@@ -2,6 +2,9 @@ local addonName, addon = ...
 local ADDON_PREFIX = addonName or "QuestCoop"
 local ADDON_VERSION = "1"
 
+-- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
+local partyQuestStates = {}
+
 -- Re-added utility and party sync functions lost during refactor
 local DEBUG = true
 local function Log(...)
@@ -138,8 +141,6 @@ local function RefreshQuestWindowIfVisible()
     if questWindow and questWindow:IsShown() then PrintQuestIDs(true) end
 end
 
--- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
-local partyQuestStates = {}
 local function ShortName(name)
     if not name then return "?" end
     return name:match("^[^%-]+") or name
