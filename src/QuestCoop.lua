@@ -317,7 +317,7 @@ function PrintQuestIDs(silentRefresh)
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
             GameTooltip:AddLine(string.format("Quest ID: %d", row.id), 0.9,0.9,0.9)
-            if row.tag and row.tag.tagName then
+            if row.tag and row.tag.tagName and row.tag.tagName ~= "" then
                 GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
             end
             if row.category and row.category ~= "" then
@@ -325,6 +325,9 @@ function PrintQuestIDs(silentRefresh)
             end
             if row.zoneOrSort and row.zoneOrSort ~= "" and row.zoneOrSort ~= row.category then
                 GameTooltip:AddLine("Zone: " .. tostring(row.zoneOrSort), 0.8,0.8,0.8)
+            end
+            if row.remoteOnly then
+                GameTooltip:AddLine("(Quest from party member)", 0.7,0.7,0.7)
             end
             -- Party member aggregation
             local hasMembers, trackedMembers, readyMembers = {}, {}, {}
