@@ -2,11 +2,11 @@ local addonName, addon = ...
 local ADDON_PREFIX = addonName or "QuestCoop"
 local ADDON_VERSION = "1"
 
--- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
-local partyQuestStates = {}
-local function ShortName(name)
-    if not name then return "?" end
-    return name:match("^[^%-]+") or name
+-- Re-added utility and party sync functions lost during refactor
+local DEBUG = true
+local function Log(...)
+    if not DEBUG then return end
+    print("QuestCoopDBG:", ...)
 end
 
 local function EnsurePrefix()
@@ -39,7 +39,6 @@ local function BuildLocalSnapshot()
 end
 
 local function SerializeSnapshot(snapshot)
-    -- Format: SNAP|version|qid,tracked,ready;qid,tracked,ready;...
     local parts = {"SNAP", ADDON_VERSION}
     local entries = {}
     for qid,data in pairs(snapshot) do
@@ -54,25 +53,21 @@ local function SendSnapshot()
     EnsurePrefix()
     local snapshot = BuildLocalSnapshot()
     local msg = SerializeSnapshot(snapshot)
-    if #msg > 240 then
-        -- Fallback: send in chunks if very large (edge case) - simple split by ';'
+    if #msg > 240 and C_ChatInfo and C_ChatInfo.SendAddonMessage then
         local header = "SNAP_PART|"..ADDON_VERSION
-        local current = {}
-        local length = #header
+        local current, length = {}, #header
         for qid,data in pairs(snapshot) do
             local seg = string.format("%d,%d,%d;", qid, data.tracked and 1 or 0, data.ready and 1 or 0)
             if length + #seg > 240 then
                 C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
-                current = {}
-                length = #header
+                current = {}; length = #header
             end
-            table.insert(current, seg)
-            length = length + #seg
+            table.insert(current, seg); length = length + #seg
         end
         if #current > 0 then
             C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
         end
-    else
+    elseif C_ChatInfo and C_ChatInfo.SendAddonMessage then
         C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
     end
 end
@@ -83,145 +78,71 @@ local function ApplySnapshot(fromPlayer, snapshotStr)
         local qid, tracked, ready = seg:match("^(%d+),(%d),(%d)$")
         if qid then
             qid = tonumber(qid)
-            partyQuestStates[fromPlayer][qid] = partyQuestStates[fromPlayer][qid] or {}
-            local entry = partyQuestStates[fromPlayer][qid]
+            local entry = partyQuestStates[fromPlayer][qid] or {}
             entry.has = true
             entry.tracked = tracked == "1"
             entry.ready = ready == "1"
-            -- Title will be filled lazily from our own view when building tooltip
+            partyQuestStates[fromPlayer][qid] = entry
         end
     end
-end
-
-local function CleanupMissing(fromPlayer, snapshotTable)
-    local current = partyQuestStates[fromPlayer]
-    if not current then return end
-    for qid,_ in pairs(current) do
-        if not snapshotTable[qid] then
-            current[qid] = nil -- remove quests no longer present
-        end
-    end
-end
-
--- Debug flag
-local DEBUG = true
-local function Log(...)
-    if not DEBUG then return end
-    print("QuestCoopDBG:", ...)
 end
 
 local function SafeCall(label, func)
     local ok, err = pcall(func)
-    if ok then
-        Log("SafeCall success", label)
-    else
-        Log("SafeCall ERROR", label, err)
-    end
+    if ok then Log("SafeCall success", label) else Log("SafeCall ERROR", label, err) end
 end
 
--- Generic helper to make a frame draggable
 local function MakeDraggable(frame, key)
     if not frame then return end
-    frame:SetMovable(true)
-    frame:EnableMouse(true)
-    frame:RegisterForDrag("LeftButton")
-    frame:SetClampedToScreen(true)
-    frame:SetScript("OnDragStart", function(self)
-        Log("DragStart", key)
-        self:StartMoving()
-    end)
+    frame:SetMovable(true); frame:EnableMouse(true); frame:RegisterForDrag("LeftButton"); frame:SetClampedToScreen(true)
+    frame:SetScript("OnDragStart", function(self) self:StartMoving() end)
     frame:SetScript("OnDragStop", function(self)
         self:StopMovingOrSizing()
         if not QuestCoopDB then QuestCoopDB = {} end
         if key then
-            local point, relativeTo, relativePoint, xOfs, yOfs = self:GetPoint()
-            QuestCoopDB[key] = {point = point, relativePoint = relativePoint, x = xOfs, y = yOfs}
-            print(string.format("QuestCoop: Saved position for %s: %s %d %d", key, relativePoint, xOfs, yOfs))
-            Log("DragStop saved", key, point, relativePoint, xOfs, yOfs)
+            local point, _, relativePoint, xOfs, yOfs = self:GetPoint()
+            QuestCoopDB[key] = {point=point, relativePoint=relativePoint, x=xOfs, y=yOfs}
         end
     end)
 end
 
--- Quest ID window (created lazily)
 local questWindow, questScrollFrame, questScrollChild
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
-    questWindow:SetSize(560, 300) -- widened to accommodate extra columns
+    questWindow:SetSize(560,300)
     questWindow:SetPoint("CENTER")
     questWindow:SetMovable(true)
     questWindow:EnableMouse(true)
     questWindow:RegisterForDrag("LeftButton")
     questWindow:SetScript("OnDragStart", function(self) self:StartMoving() end)
     questWindow:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
-    questWindow:SetBackdrop({bgFile = "Interface/Tooltips/UI-Tooltip-Background", edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 }})
+    questWindow:SetBackdrop({bgFile="Interface/Tooltips/UI-Tooltip-Background", edgeFile="Interface/Tooltips/UI-Tooltip-Border", tile=true, tileSize=16, edgeSize=16, insets={left=4,right=4,top=4,bottom=4}})
     questWindow:SetBackdropColor(0,0,0,0.85)
     questWindow:Hide()
 
-    local title = questWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("Quest IDs")
-
+    local title = questWindow:CreateFontString(nil,"OVERLAY","GameFontNormalLarge")
+    title:SetPoint("TOP",0,-10); title:SetText("Quest IDs")
     local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", 0, 0)
+    close:SetPoint("TOPRIGHT",0,0)
 
-    questScrollFrame = CreateFrame("ScrollFrame", "QuestCoopQuestScroll", questWindow, "UIPanelScrollFrameTemplate")
-    questScrollFrame:SetPoint("TOPLEFT", 16, -40)
-    questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
-
+    questScrollFrame = CreateFrame("ScrollFrame","QuestCoopQuestScroll",questWindow,"UIPanelScrollFrameTemplate")
+    questScrollFrame:SetPoint("TOPLEFT",16,-40); questScrollFrame:SetPoint("BOTTOMRIGHT",-30,16)
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
-    questScrollChild:SetSize(520, 1) -- widened for additional columns
+    questScrollChild:SetSize(520,1)
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
-
-    Log("QuestWindow created")
 end
 
--- Internal helper to refresh quest window if shown (silent)
 local function RefreshQuestWindowIfVisible()
-    if not questWindow or not questWindow:IsShown() then return end
-    -- Call PrintQuestIDs but without shift printing and without forcing visibility changes beyond refresh.
-    PrintQuestIDs(true) -- pass silent flag
+    if questWindow and questWindow:IsShown() then PrintQuestIDs(true) end
 end
 
--- Function to hide all quests
-function HideAllQuests()
-    Log("HideAllQuests START")
-    print("QuestCoop: Attempting to hide quests...")
-    
-    -- Try to get all quests
-    local numEntries = C_QuestLog.GetNumQuestLogEntries()
-    Log("HideAllQuests numEntries", numEntries)
-    print("QuestCoop: Number of quests found: " .. numEntries)
-    
-    for i = 1, numEntries do
-    local questInfo = C_QuestLog.GetInfo(i)
-    Log("HideAllQuests loop", i, questInfo and questInfo.title, questInfo and questInfo.isHeader)
-        if questInfo then
-            print("QuestCoop: Processing index " .. i .. ": " .. (questInfo.title or "No title"))
-            
-            if not questInfo.isHeader then
-                print("QuestCoop: Quest is not a header")
-                local questID = questInfo.questID
-                print("QuestCoop: Quest ID " .. questID)
-                
-                if questID then
-                    print("QuestCoop: Attempting to untrack quest: " .. questInfo.title)
-                    C_QuestLog.RemoveQuestWatch(questID)
-                    print("QuestCoop: Untracked quest: " .. questInfo.title)
-                    Log("HideAllQuests untracked", questID)
-                end
-            else
-                print("QuestCoop: Skipping header: " .. questInfo.title)
-            end
-        end
-    end
-    
-    -- Force update the objective tracker
-    ObjectiveTracker_Update()
-    Log("HideAllQuests ObjectiveTracker_Update")
-    print("QuestCoop: Finished hiding quests")
-    Log("HideAllQuests END")
+-- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
+local partyQuestStates = {}
+local function ShortName(name)
+    if not name then return "?" end
+    return name:match("^[^%-]+") or name
 end
 
 -- Function to print current quest IDs
@@ -230,7 +151,6 @@ end
 function PrintQuestIDs(silentRefresh)
     Log("PrintQuestIDs START")
     CreateQuestWindow()
-    -- Build structured rows instead of a single concatenated string per quest.
     local rows = {}
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
@@ -238,6 +158,7 @@ function PrintQuestIDs(silentRefresh)
     if shiftDown and not silentRefresh then
         print("QuestCoop: (Shift) Also printing quest IDs to chat...")
     end
+
     for i = 1, numEntries do
         local questInfo = C_QuestLog.GetInfo(i)
         Log("PrintQuestIDs loop", i, questInfo and questInfo.title, questInfo and questInfo.isHeader)
@@ -245,18 +166,16 @@ function PrintQuestIDs(silentRefresh)
             local questID = questInfo.questID
             if questID then
                 local title = questInfo.title or "(no title)"
-                -- Determine tracked state. Retail API first, legacy fallback.
+                -- Tracked state
                 local tracked = false
                 if C_QuestLog.GetQuestWatchType then
                     tracked = C_QuestLog.GetQuestWatchType(questID) ~= nil
                 elseif IsQuestWatched then
                     local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
-                    if logIndex then
-                        tracked = IsQuestWatched(logIndex)
-                    end
+                    if logIndex then tracked = IsQuestWatched(logIndex) end
                 end
                 local trackText = tracked and "Yes" or "No"
-                -- Determine readiness for turn-in (completion of objectives)
+                -- Ready state
                 local ready = false
                 if C_QuestLog.IsComplete then
                     ready = C_QuestLog.IsComplete(questID)
@@ -267,25 +186,24 @@ function PrintQuestIDs(silentRefresh)
                 end
                 local readyText = ready and "Yes" or "No"
                 local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
-                -- Filter out hidden quests (tag name may appear as "Hidden Quest")
-                if questTagInfo and questTagInfo.tagName == "Hidden Quest" then
+                local isHidden = questTagInfo and questTagInfo.tagName == "Hidden Quest"
+                if isHidden then
                     Log("Skipping hidden quest", questID, title)
-                    goto continueQuestLoop
+                else
+                    local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
+                    local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
+                    table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
+                    local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
+                    Log("PrintQuestIDs row", chatLine)
+                    if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
                 end
-                local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
-                local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
-                table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
-                local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
-                Log("PrintQuestIDs row", chatLine)
-                if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
             end
         end
-        ::continueQuestLoop::
     end
-    -- (Old placeholder loop for remote-only quests removed)
-    -- Clear previous row frames / fontstrings
+
+    -- Clear previous fontstrings
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
-    wipe(questScrollChild.lines)
+    if wipe then wipe(questScrollChild.lines) else for k in pairs(questScrollChild.lines) do questScrollChild.lines[k]=nil end end
 
     -- Column layout constants
     local COL_ID_X = 0
@@ -472,43 +390,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
         
         -- Set up click handler for the button defined in XML
     if not QuestCoopDB then QuestCoopDB = {} end
-    local button = _G["HideQuestsButton"]
     local printButton = _G["PrintQuestIDsButton"]
-    Log("Fetched buttons", button ~= nil, printButton ~= nil)
-        if button then
-            print("QuestCoop: Button found")
-            Log("HideQuestsButton setup")
-            button:SetScript("OnClick", function(self, button)
-                Log("HideQuestsButton clicked")
-                print("QuestCoop: Button clicked!")
-                HideAllQuests()
-            end)
-            print("QuestCoop: Button handler set up")
-            
-            -- Explicitly set the button's position and show it
-            button:ClearAllPoints()
-            if QuestCoopDB.hideButtonPos then
-                local pos = QuestCoopDB.hideButtonPos
-                button:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or 0)
-                print("QuestCoop: Restored HideQuestsButton position")
-            else
-                button:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-                print("QuestCoop: Using default HideQuestsButton position")
-            end
-            SafeCall("HideQuestsButton SetUserPlaced", function() button:SetUserPlaced(true) end)
-            local isUserPlaced = button.IsUserPlaced and button:IsUserPlaced() or "(method missing)"
-            Log("HideQuestsButton IsUserPlaced", isUserPlaced)
-            -- Show and draggable wiring
-            SafeCall("HideQuestsButton Show", function() button:Show() end)
-            Log("HideQuestsButton IsShown", button:IsShown())
-            MakeDraggable(button, "hideButtonPos")
-            Log("HideQuestsButton MakeDraggable complete")
-            Log("HideQuestsButton draggable ready")
-            print("QuestCoop: Button position set and shown")
-        else
-            print("QuestCoop: Button not found")
-            Log("HideQuestsButton missing")
-        end
+    Log("Fetched buttons", printButton ~= nil)
 
         if printButton then
             Log("PrintQuestIDsButton setup")

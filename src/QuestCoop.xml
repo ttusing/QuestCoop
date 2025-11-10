@@ -2,29 +2,6 @@
     <Frame name="QuestCoopFrame">
         <Frames>
             <!-- BackdropTemplate removed temporarily for debugging button creation -->
-            <Button name="HideQuestsButton" inherits="UIPanelButtonTemplate">
-                <Size>
-                    <AbsDimension x="120" y="30"/>
-                </Size>
-                <Anchors>
-                    <Anchor point="CENTER">
-                        <Offset>
-                            <AbsDimension x="0" y="0"/>
-                        </Offset>
-                    </Anchor>
-                </Anchors>
-                <Layers>
-                    <Layer level="ARTWORK">
-                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Hide Quests"/>
-                    </Layer>
-                </Layers>
-                <Scripts>
-                    <OnClick>
-                        HideAllQuests()
-                    </OnClick>
-                </Scripts>
-            </Button>
-            <!-- BackdropTemplate removed temporarily for debugging button creation -->
             <Button name="PrintQuestIDsButton" inherits="UIPanelButtonTemplate">
                 <Size>
                     <AbsDimension x="160" y="30"/>
