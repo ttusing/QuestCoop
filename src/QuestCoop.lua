@@ -44,7 +44,7 @@ local questWindow, questScrollFrame, questScrollChild
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
-    questWindow:SetSize(400, 300)
+    questWindow:SetSize(560, 300) -- widened to accommodate extra columns
     questWindow:SetPoint("CENTER")
     questWindow:SetMovable(true)
     questWindow:EnableMouse(true)
@@ -67,7 +67,7 @@ local function CreateQuestWindow()
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
-    questScrollChild:SetSize(360, 1) -- width roughly scrollframe width minus scrollbar
+    questScrollChild:SetSize(520, 1) -- widened for additional columns
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
 
@@ -153,8 +153,18 @@ function PrintQuestIDs(silentRefresh)
                     end
                 end
                 local trackText = tracked and "Yes" or "No"
-                table.insert(rows, {id = questID, title = title, tracked = trackText})
-                local chatLine = string.format("%d - %s (%s)", questID, title, trackText)
+                -- Determine readiness for turn-in (completion of objectives)
+                local ready = false
+                if C_QuestLog.IsComplete then
+                    ready = C_QuestLog.IsComplete(questID)
+                elseif IsQuestComplete then
+                    ready = IsQuestComplete(questID)
+                elseif questInfo.isComplete ~= nil then
+                    ready = questInfo.isComplete
+                end
+                local readyText = ready and "Yes" or "No"
+                table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText})
+                local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                 Log("PrintQuestIDs row", chatLine)
                 if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
             end
@@ -166,8 +176,10 @@ function PrintQuestIDs(silentRefresh)
 
     -- Column layout constants
     local COL_ID_X = 0
-    local COL_TITLE_X = 70
-    local COL_TRACKED_X = 330 -- near right edge (scroll child width ~360)
+    local COL_TITLE_X = 60
+    local COL_TRACKED_X = 270
+    local COL_INLOG_X = 330
+    local COL_READY_X = 390
     local ROW_HEIGHT = 14
     local yOff = -2
 
@@ -175,7 +187,7 @@ function PrintQuestIDs(silentRefresh)
     local header = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     header:SetPoint("TOPLEFT", COL_ID_X, yOff)
     header:SetJustifyH("LEFT")
-    header:SetText("ID    Title                                   Tracked")
+    header:SetText("ID   Title                               Trk  Log  Ready")
     table.insert(questScrollChild.lines, header)
     yOff = yOff - ROW_HEIGHT - 4
 
@@ -200,6 +212,20 @@ function PrintQuestIDs(silentRefresh)
         trackedFS:SetJustifyH("LEFT")
         trackedFS:SetText(row.tracked)
         table.insert(questScrollChild.lines, trackedFS)
+
+        -- In Log cell (always Yes because we enumerate quest log)
+        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
+        inlogFS:SetJustifyH("LEFT")
+        inlogFS:SetText(row.inlog)
+        table.insert(questScrollChild.lines, inlogFS)
+
+        -- Ready cell (quest complete -> can turn in)
+        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
+        readyFS:SetJustifyH("LEFT")
+        readyFS:SetText(row.ready)
+        table.insert(questScrollChild.lines, readyFS)
 
         yOff = yOff - ROW_HEIGHT - 2
     end
