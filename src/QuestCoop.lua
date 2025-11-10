@@ -282,6 +282,7 @@ function PrintQuestIDs(silentRefresh)
         end
         ::continueQuestLoop::
     end
+    -- (Old placeholder loop for remote-only quests removed)
     -- Clear previous row frames / fontstrings
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
     wipe(questScrollChild.lines)
@@ -326,6 +327,19 @@ function PrintQuestIDs(silentRefresh)
     headerReady:SetText("Ready")
     table.insert(questScrollChild.lines, headerReady)
     yOff = yOff - ROW_HEIGHT - 4
+
+    -- Merge quests that party members have which we do not.
+    local rowMap = {}
+    for _, r in ipairs(rows) do rowMap[r.id] = r end
+    for player, quests in pairs(partyQuestStates) do
+        for qid, data in pairs(quests) do
+            if data.has and not rowMap[qid] then
+                table.insert(rows, {id = qid, title = data.title or ("Quest "..qid), tracked = data.tracked and "Yes" or "No", inlog = "No", ready = data.ready and "Yes" or "No", remoteOnly = true})
+                rowMap[qid] = rows[#rows]
+            end
+        end
+    end
+    table.sort(rows, function(a,b) return a.id < b.id end)
 
     for _, row in ipairs(rows) do
         -- ID cell
@@ -410,6 +424,27 @@ function PrintQuestIDs(silentRefresh)
         end)
         rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
         table.insert(questScrollChild.lines, rowButton)
+
+        -- Determine row color classification (simplified spec):
+        -- Light green if ALL players in group have the quest; light red if ANY player missing.
+        local totalPlayers = GetNumGroupMembers() -- includes self; 0 if solo
+        if totalPlayers == 0 then totalPlayers = 1 end -- treat solo as 1
+        local haveCount = 0
+        -- Count party possession (excluding ourselves first)
+        for player, quests in pairs(partyQuestStates) do
+            local q = quests[row.id]
+            if q and q.has then haveCount = haveCount + 1 end
+        end
+        if row.inlog == "Yes" then haveCount = haveCount + 1 end
+        local r,g,b
+        if haveCount == totalPlayers then
+            r,g,b = 0.6,0.85,0.6 -- light green
+        else
+            r,g,b = 0.9,0.55,0.55 -- light red
+        end
+        rowButton.tex = rowButton:CreateTexture(nil, "BACKGROUND")
+        rowButton.tex:SetAllPoints(rowButton)
+        rowButton.tex:SetColorTexture(r,g,b,0.25)
 
         yOff = yOff - ROW_HEIGHT - 2
     end
