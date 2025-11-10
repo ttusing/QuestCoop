@@ -318,15 +318,15 @@ function PrintQuestIDs(silentRefresh)
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
             GameTooltip:AddLine(string.format("Quest ID: %d", row.id), 0.9,0.9,0.9)
-            if row.tag and row.tag.tagName and row.tag.tagName ~= "" then
-                GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
-            end
-            if row.category and row.category ~= "" then
-                GameTooltip:AddLine("Category: " .. tostring(row.category), 0.8,0.8,0.8)
-            end
-            if row.zoneOrSort and row.zoneOrSort ~= "" and row.zoneOrSort ~= row.category then
-                GameTooltip:AddLine("Zone: " .. tostring(row.zoneOrSort), 0.8,0.8,0.8)
-            end
+            -- Always show tag field for debugging
+            local tagStr = (row.tag and row.tag.tagName and row.tag.tagName ~= "") and row.tag.tagName or "(no tag)"
+            GameTooltip:AddLine("Tag: " .. tagStr, 0.8,0.8,0.8)
+            -- Always show category for debugging
+            local catStr = (row.category and row.category ~= "") and tostring(row.category) or "(no category)"
+            GameTooltip:AddLine("Category: " .. catStr, 0.8,0.8,0.8)
+            -- Always show zone for debugging
+            local zoneStr = (row.zoneOrSort and row.zoneOrSort ~= "") and tostring(row.zoneOrSort) or "(no zone)"
+            GameTooltip:AddLine("Zone: " .. zoneStr, 0.8,0.8,0.8)
             if row.remoteOnly then
                 GameTooltip:AddLine("(Quest from party member)", 0.7,0.7,0.7)
             end
