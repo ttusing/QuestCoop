@@ -193,7 +193,7 @@ function PrintQuestIDs(silentRefresh)
                 else
                     local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
                     local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
-                    table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
+                    table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, zoneOrSort = zoneOrSort, questInfo = questInfo})
                     local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                     Log("PrintQuestIDs row", chatLine)
                     if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
@@ -317,11 +317,14 @@ function PrintQuestIDs(silentRefresh)
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
             GameTooltip:AddLine(string.format("Quest ID: %d", row.id), 0.9,0.9,0.9)
+            if row.tag and row.tag.tagName then
+                GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
+            end
             if row.category and row.category ~= "" then
                 GameTooltip:AddLine("Category: " .. tostring(row.category), 0.8,0.8,0.8)
             end
-            if row.tag and row.tag.tagName then
-                GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
+            if row.zoneOrSort and row.zoneOrSort ~= "" and row.zoneOrSort ~= row.category then
+                GameTooltip:AddLine("Zone: " .. tostring(row.zoneOrSort), 0.8,0.8,0.8)
             end
             -- Party member aggregation
             local hasMembers, trackedMembers, readyMembers = {}, {}, {}
