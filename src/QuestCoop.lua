@@ -191,20 +191,18 @@ function PrintQuestIDs(silentRefresh)
                 if isHidden then
                     Log("Skipping hidden quest", questID, title)
                 else
-                    -- Debug: print all questInfo fields
-                    Log("=== QUEST DEBUG ===", questID, title)
-                    Log("  questTagInfo:", questTagInfo and "exists" or "NIL")
-                    if questTagInfo then
-                        Log("    tagName:", questTagInfo.tagName or "nil")
-                        Log("    tagID:", questTagInfo.tagID or "nil")
-                    end
-                    Log("  questInfo.header:", questInfo.header or "nil")
-                    Log("  questInfo.zoneOrSort:", questInfo.zoneOrSort or "nil")
-                    Log("  questInfo.campaignID:", questInfo.campaignID or "nil")
+                    -- Get quest location/zone info using proper API
+                    local questName, level, suggestedGroup, isHeader, isCollapsed, isComplete, frequency, questIDFromAPI, startEvent, displayQuestID, isOnMap, hasLocalPOI, isTask, isBounty, isStory, isHidden, isScaling = GetQuestLogTitle(i)
+                    local mapID = C_QuestLog.GetQuestLocation and C_QuestLog.GetQuestLocation(questID)
+                    local zoneName = mapID and C_Map and C_Map.GetMapInfo and C_Map.GetMapInfo(mapID) and C_Map.GetMapInfo(mapID).name or ""
                     
-                    local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
-                    local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
-                    Log("  FINAL zoneOrSort:", zoneOrSort, "category:", detailedCategory)
+                    local zoneOrSort = zoneName or ""
+                    local detailedCategory = zoneOrSort
+                    
+                    -- Try to get quest tag if available
+                    local tagName = questTagInfo and questTagInfo.tagName or ""
+                    
+                    Log("  FINAL - Zone:", zoneOrSort, "Tag:", tagName)
                     table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, zoneOrSort = zoneOrSort, questInfo = questInfo})
                     local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                     Log("PrintQuestIDs row", chatLine)
