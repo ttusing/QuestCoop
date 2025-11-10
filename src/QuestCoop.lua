@@ -183,12 +183,36 @@ function PrintQuestIDs(silentRefresh)
     local ROW_HEIGHT = 14
     local yOff = -2
 
-    -- Header row
-    local header = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    header:SetPoint("TOPLEFT", COL_ID_X, yOff)
-    header:SetJustifyH("LEFT")
-    header:SetText("ID   Title                               Trk  Log  Ready")
-    table.insert(questScrollChild.lines, header)
+    -- Header row: use individual header cells for precise alignment
+    local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerID:SetPoint("TOPLEFT", COL_ID_X, yOff)
+    headerID:SetJustifyH("LEFT")
+    headerID:SetText("ID")
+    table.insert(questScrollChild.lines, headerID)
+
+    local headerTitle = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerTitle:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
+    headerTitle:SetJustifyH("LEFT")
+    headerTitle:SetText("Title")
+    table.insert(questScrollChild.lines, headerTitle)
+
+    local headerTracked = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerTracked:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
+    headerTracked:SetJustifyH("LEFT")
+    headerTracked:SetText("Trk")
+    table.insert(questScrollChild.lines, headerTracked)
+
+    local headerInLog = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerInLog:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
+    headerInLog:SetJustifyH("LEFT")
+    headerInLog:SetText("Log")
+    table.insert(questScrollChild.lines, headerInLog)
+
+    local headerReady = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    headerReady:SetPoint("TOPLEFT", COL_READY_X, yOff)
+    headerReady:SetJustifyH("LEFT")
+    headerReady:SetText("Ready")
+    table.insert(questScrollChild.lines, headerReady)
     yOff = yOff - ROW_HEIGHT - 4
 
     for _, row in ipairs(rows) do
