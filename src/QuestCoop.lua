@@ -267,6 +267,11 @@ function PrintQuestIDs(silentRefresh)
                 end
                 local readyText = ready and "Yes" or "No"
                 local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
+                -- Filter out hidden quests (tag name may appear as "Hidden Quest")
+                if questTagInfo and questTagInfo.tagName == "Hidden Quest" then
+                    Log("Skipping hidden quest", questID, title)
+                    goto continueQuestLoop
+                end
                 local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
                 local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
                 table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
@@ -275,6 +280,7 @@ function PrintQuestIDs(silentRefresh)
                 if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
             end
         end
+        ::continueQuestLoop::
     end
     -- Clear previous row frames / fontstrings
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
