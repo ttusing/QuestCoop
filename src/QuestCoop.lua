@@ -163,7 +163,10 @@ function PrintQuestIDs(silentRefresh)
                     ready = questInfo.isComplete
                 end
                 local readyText = ready and "Yes" or "No"
-                table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText})
+                local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
+                local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
+                local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
+                table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
                 local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                 Log("PrintQuestIDs row", chatLine)
                 if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
@@ -227,7 +230,20 @@ function PrintQuestIDs(silentRefresh)
         local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
-        titleFS:SetText(row.title)
+        -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
+        local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
+        local displayTitle = row.title
+        titleFS:SetText(displayTitle)
+        if titleFS:GetStringWidth() > maxPixelWidth then
+            -- iterative truncate; naive but safe for small number of rows
+            local len = displayTitle:len()
+            while len > 3 and titleFS:GetStringWidth() > maxPixelWidth do
+                len = len - 1
+                displayTitle = displayTitle:sub(1, len) .. "…"
+                titleFS:SetText(displayTitle)
+            end
+        end
+        titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
 
         -- Tracked cell
@@ -250,6 +266,26 @@ function PrintQuestIDs(silentRefresh)
         readyFS:SetJustifyH("LEFT")
         readyFS:SetText(row.ready)
         table.insert(questScrollChild.lines, readyFS)
+
+        -- Mouseover tooltip region (use an invisible button spanning the row for simplicity)
+        local rowButton = CreateFrame("Button", nil, questScrollChild)
+        rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
+        rowButton:SetPoint("BOTTOMRIGHT", readyFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
+            GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
+            GameTooltip:AddLine(string.format("Quest ID: %d", row.id), 0.9,0.9,0.9)
+            if row.category and row.category ~= "" then
+                GameTooltip:AddLine("Category: " .. tostring(row.category), 0.8,0.8,0.8)
+            end
+            if row.tag and row.tag.tagName then
+                GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
+            end
+            GameTooltip:AddLine("Tracked: " .. row.tracked .. "  Ready: " .. row.ready, 0.7,0.7,0.7)
+            GameTooltip:Show()
+        end)
+        rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        table.insert(questScrollChild.lines, rowButton)
 
         yOff = yOff - ROW_HEIGHT - 2
     end
