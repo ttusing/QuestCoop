@@ -118,7 +118,8 @@ end
 function PrintQuestIDs()
     Log("PrintQuestIDs START")
     CreateQuestWindow()
-    local lines = {}
+    -- Build structured rows instead of a single concatenated string per quest.
+    local rows = {}
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
     local shiftDown = IsShiftKeyDown and IsShiftKeyDown()
@@ -131,31 +132,74 @@ function PrintQuestIDs()
         if questInfo and not questInfo.isHeader then
             local questID = questInfo.questID
             if questID then
-                local line = string.format("%d - %s", questID, questInfo.title or "(no title)")
-                table.insert(lines, line)
-                Log("PrintQuestIDs line", line)
-                if shiftDown then print("QuestCoop:", line) end
+                local title = questInfo.title or "(no title)"
+                -- Determine tracked state. Retail API first, legacy fallback.
+                local tracked = false
+                if C_QuestLog.GetQuestWatchType then
+                    tracked = C_QuestLog.GetQuestWatchType(questID) ~= nil
+                elseif IsQuestWatched then
+                    local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+                    if logIndex then
+                        tracked = IsQuestWatched(logIndex)
+                    end
+                end
+                local trackText = tracked and "Yes" or "No"
+                table.insert(rows, {id = questID, title = title, tracked = trackText})
+                local chatLine = string.format("%d - %s (%s)", questID, title, trackText)
+                Log("PrintQuestIDs row", chatLine)
+                if shiftDown then print("QuestCoop:", chatLine) end
             end
         end
     end
-    -- Clear previous lines
+    -- Clear previous row frames / fontstrings
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
     wipe(questScrollChild.lines)
+
+    -- Column layout constants
+    local COL_ID_X = 0
+    local COL_TITLE_X = 70
+    local COL_TRACKED_X = 330 -- near right edge (scroll child width ~360)
+    local ROW_HEIGHT = 14
     local yOff = -2
-    for idx, text in ipairs(lines) do
-        local fs = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        fs:SetPoint("TOPLEFT", 0, yOff)
-        fs:SetJustifyH("LEFT")
-        fs:SetText(text)
-        table.insert(questScrollChild.lines, fs)
-        local h = fs:GetStringHeight() or 12
-        yOff = yOff - h - 2
+
+    -- Header row
+    local header = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    header:SetPoint("TOPLEFT", COL_ID_X, yOff)
+    header:SetJustifyH("LEFT")
+    header:SetText("ID    Title                                   Tracked")
+    table.insert(questScrollChild.lines, header)
+    yOff = yOff - ROW_HEIGHT - 4
+
+    for _, row in ipairs(rows) do
+        -- ID cell
+        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
+        idFS:SetJustifyH("LEFT")
+        idFS:SetText(row.id)
+        table.insert(questScrollChild.lines, idFS)
+
+        -- Title cell
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
+        titleFS:SetJustifyH("LEFT")
+        titleFS:SetText(row.title)
+        table.insert(questScrollChild.lines, titleFS)
+
+        -- Tracked cell
+        local trackedFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        trackedFS:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
+        trackedFS:SetJustifyH("LEFT")
+        trackedFS:SetText(row.tracked)
+        table.insert(questScrollChild.lines, trackedFS)
+
+        yOff = yOff - ROW_HEIGHT - 2
     end
+
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
-    Log("QuestWindow lines populated", #lines, "height", totalHeight)
+    Log("QuestWindow rows populated", #rows, "height", totalHeight)
     questWindow:Show()
-    Log("QuestWindow populated", #lines)
+    Log("QuestWindow populated", #rows)
     Log("PrintQuestIDs END")
 end
 
