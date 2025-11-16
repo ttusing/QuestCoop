@@ -160,7 +160,7 @@ local function CreateQuestWindow()
 
     local title = questWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", 0, -10)
-    title:SetText("Quest IDs")
+    title:SetText("Quest Co-op")
 
     local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 0, 0)
@@ -182,46 +182,6 @@ local function RefreshQuestWindowIfVisible()
     if not questWindow or not questWindow:IsShown() then return end
     -- Call PrintQuestIDs but without shift printing and without forcing visibility changes beyond refresh.
     PrintQuestIDs(true) -- pass silent flag
-end
-
--- Function to hide all quests
-function HideAllQuests()
-    Log("HideAllQuests START")
-    print("QuestCoop: Attempting to hide quests...")
-    
-    -- Try to get all quests
-    local numEntries = C_QuestLog.GetNumQuestLogEntries()
-    Log("HideAllQuests numEntries", numEntries)
-    print("QuestCoop: Number of quests found: " .. numEntries)
-    
-    for i = 1, numEntries do
-    local questInfo = C_QuestLog.GetInfo(i)
-    Log("HideAllQuests loop", i, questInfo and questInfo.title, questInfo and questInfo.isHeader)
-        if questInfo then
-            print("QuestCoop: Processing index " .. i .. ": " .. (questInfo.title or "No title"))
-            
-            if not questInfo.isHeader then
-                print("QuestCoop: Quest is not a header")
-                local questID = questInfo.questID
-                print("QuestCoop: Quest ID " .. questID)
-                
-                if questID then
-                    print("QuestCoop: Attempting to untrack quest: " .. questInfo.title)
-                    C_QuestLog.RemoveQuestWatch(questID)
-                    print("QuestCoop: Untracked quest: " .. questInfo.title)
-                    Log("HideAllQuests untracked", questID)
-                end
-            else
-                print("QuestCoop: Skipping header: " .. questInfo.title)
-            end
-        end
-    end
-    
-    -- Force update the objective tracker
-    ObjectiveTracker_Update()
-    Log("HideAllQuests ObjectiveTracker_Update")
-    print("QuestCoop: Finished hiding quests")
-    Log("HideAllQuests END")
 end
 
 -- Function to print current quest IDs
@@ -431,43 +391,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
         
         -- Set up click handler for the button defined in XML
     if not QuestCoopDB then QuestCoopDB = {} end
-    local button = _G["HideQuestsButton"]
     local printButton = _G["PrintQuestIDsButton"]
-    Log("Fetched buttons", button ~= nil, printButton ~= nil)
-        if button then
-            print("QuestCoop: Button found")
-            Log("HideQuestsButton setup")
-            button:SetScript("OnClick", function(self, button)
-                Log("HideQuestsButton clicked")
-                print("QuestCoop: Button clicked!")
-                HideAllQuests()
-            end)
-            print("QuestCoop: Button handler set up")
-            
-            -- Explicitly set the button's position and show it
-            button:ClearAllPoints()
-            if QuestCoopDB.hideButtonPos then
-                local pos = QuestCoopDB.hideButtonPos
-                button:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or 0)
-                print("QuestCoop: Restored HideQuestsButton position")
-            else
-                button:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
-                print("QuestCoop: Using default HideQuestsButton position")
-            end
-            SafeCall("HideQuestsButton SetUserPlaced", function() button:SetUserPlaced(true) end)
-            local isUserPlaced = button.IsUserPlaced and button:IsUserPlaced() or "(method missing)"
-            Log("HideQuestsButton IsUserPlaced", isUserPlaced)
-            -- Show and draggable wiring
-            SafeCall("HideQuestsButton Show", function() button:Show() end)
-            Log("HideQuestsButton IsShown", button:IsShown())
-            MakeDraggable(button, "hideButtonPos")
-            Log("HideQuestsButton MakeDraggable complete")
-            Log("HideQuestsButton draggable ready")
-            print("QuestCoop: Button position set and shown")
-        else
-            print("QuestCoop: Button not found")
-            Log("HideQuestsButton missing")
-        end
+    Log("Fetched printButton", printButton ~= nil)
 
         if printButton then
             Log("PrintQuestIDsButton setup")
