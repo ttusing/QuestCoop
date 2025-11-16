@@ -190,8 +190,8 @@ end
 function PrintQuestIDs(silentRefresh)
     Log("PrintQuestIDs START")
     CreateQuestWindow()
-    -- Build structured rows instead of a single concatenated string per quest.
-    local rows = {}
+    -- Build structured rows organized by tag
+    local questsByTag = {} -- questsByTag[tagName] = {quest1, quest2, ...}
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
     local shiftDown = IsShiftKeyDown and IsShiftKeyDown() and not silentRefresh
@@ -227,9 +227,21 @@ function PrintQuestIDs(silentRefresh)
                 end
                 local readyText = ready and "Yes" or "No"
                 local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
-                local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
-                local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
-                table.insert(rows, {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
+                -- Skip quests with "hidden quest" tag
+                if questTagInfo and questTagInfo.tagName and questTagInfo.tagName:lower() == "hidden quest" then
+                    Log("Skipping hidden quest", questID, title)
+                else
+                    local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
+                    local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
+                    local tagName = questTagInfo and questTagInfo.tagName or "No Tag"
+                    
+                    -- Initialize tag group if needed
+                    if not questsByTag[tagName] then
+                        questsByTag[tagName] = {}
+                    end
+                    
+                    table.insert(questsByTag[tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
+                end
                 local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                 Log("PrintQuestIDs row", chatLine)
                 if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
@@ -241,15 +253,23 @@ function PrintQuestIDs(silentRefresh)
     wipe(questScrollChild.lines)
 
     -- Column layout constants
-    local COL_ID_X = 0
-    local COL_TITLE_X = 60
-    local COL_TRACKED_X = 270
-    local COL_INLOG_X = 330
-    local COL_READY_X = 390
+    local COL_ID_X = 10
+    local COL_TITLE_X = 70
+    local COL_TRACKED_X = 280
+    local COL_INLOG_X = 340
+    local COL_READY_X = 400
     local ROW_HEIGHT = 14
+    local SUBHEADING_HEIGHT = 18
     local yOff = -2
-
-    -- Header row: use individual header cells for precise alignment
+    
+    -- Sort tags alphabetically for consistent display
+    local sortedTags = {}
+    for tagName, _ in pairs(questsByTag) do
+        table.insert(sortedTags, tagName)
+    end
+    table.sort(sortedTags)
+    
+    -- Header row with column labels
     local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     headerID:SetPoint("TOPLEFT", COL_ID_X, yOff)
     headerID:SetJustifyH("LEFT")
@@ -279,9 +299,24 @@ function PrintQuestIDs(silentRefresh)
     headerReady:SetJustifyH("LEFT")
     headerReady:SetText("Ready")
     table.insert(questScrollChild.lines, headerReady)
+    
     yOff = yOff - ROW_HEIGHT - 4
-
-    for _, row in ipairs(rows) do
+    
+    -- Render quests grouped by tag with subheadings
+    for _, tagName in ipairs(sortedTags) do
+        local questsInTag = questsByTag[tagName]
+        
+        -- Create subheading for this tag
+        local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        subheading:SetPoint("TOPLEFT", 0, yOff)
+        subheading:SetJustifyH("LEFT")
+        subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
+        subheading:SetText(string.format("%s (%d)", tagName, #questsInTag))
+        table.insert(questScrollChild.lines, subheading)
+        yOff = yOff - SUBHEADING_HEIGHT
+        
+        -- Render each quest under this tag
+        for _, row in ipairs(questsInTag) do
         -- ID cell
         local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
@@ -366,13 +401,17 @@ function PrintQuestIDs(silentRefresh)
         table.insert(questScrollChild.lines, rowButton)
 
         yOff = yOff - ROW_HEIGHT - 2
+        end
+        
+        -- Add spacing after each tag group
+        yOff = yOff - 6
     end
 
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
-    Log("QuestWindow rows populated", #rows, "height", totalHeight)
+    Log("QuestWindow rows populated", "height", totalHeight)
     questWindow:Show()
-    Log("QuestWindow populated", #rows)
+    Log("QuestWindow populated with tags")
     Log("PrintQuestIDs END")
 end
 
