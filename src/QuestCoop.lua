@@ -196,6 +196,44 @@ local function RefreshQuestWindowIfVisible()
     PrintQuestIDs(true) -- pass silent flag
 end
 
+local function SendTrackCommand(questID, shouldTrack)
+    if not IsInGroup() then return end
+    EnsurePrefix()
+    -- Format: TRACK|version|questID|1/0
+    local action = shouldTrack and "1" or "0"
+    local msg = string.format("TRACK|%s|%d|%s", ADDON_VERSION, questID, action)
+    C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
+    Log("Sent track command", questID, shouldTrack)
+end
+
+local function HandleTrackCommand(questID, shouldTrack)
+    Log("Handling track command", questID, shouldTrack)
+    if shouldTrack then
+        -- Add quest to tracker
+        if C_QuestLog.AddQuestWatch then
+            C_QuestLog.AddQuestWatch(questID)
+        elseif AddQuestWatch then
+            local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+            if logIndex then
+                AddQuestWatch(logIndex)
+            end
+        end
+    else
+        -- Remove quest from tracker
+        if C_QuestLog.RemoveQuestWatch then
+            C_QuestLog.RemoveQuestWatch(questID)
+        elseif RemoveQuestWatch then
+            local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+            if logIndex then
+                RemoveQuestWatch(logIndex)
+            end
+        end
+    end
+    -- Refresh the window and send updated snapshot
+    RefreshQuestWindowIfVisible()
+    SendSnapshot()
+end
+
 -- Function to print current quest IDs
 -- PrintQuestIDs(silentRefresh)
 -- When silentRefresh is true, we don't echo to chat even if shift is down.
@@ -266,8 +304,9 @@ function PrintQuestIDs(silentRefresh)
         end
     end
     
-    -- Now collect party members' quests
+    -- Now collect party members' quests (excluding local player to avoid duplication)
     for partyMember, quests in pairs(partyQuestStates) do
+        -- Skip if this is the local player (avoid duplicating our own quests)
         if partyMember ~= playerName then
             questsByPlayer[partyMember] = {}
             for questID, questData in pairs(quests) do
@@ -288,6 +327,74 @@ function PrintQuestIDs(silentRefresh)
                         end
                         
                         table.insert(questsByPlayer[partyMember][tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = "", isLocal = false})
+                    end
+                end
+            end
+        end
+    end
+    
+    -- Build a list of all party members (including local player)
+    local allPartyMembers = {}
+    for member, _ in pairs(questsByPlayer) do
+        table.insert(allPartyMembers, member)
+    end
+    local partySize = #allPartyMembers
+    
+    -- Identify shared quests (quests that ALL party members have)
+    local sharedQuestsByTag = {}
+    if partySize > 1 then
+        -- Get all quest IDs from the first player
+        local allQuestIDs = {}
+        for tagName, quests in pairs(questsByPlayer[allPartyMembers[1]]) do
+            for _, quest in ipairs(quests) do
+                allQuestIDs[quest.id] = {tagName = tagName, quest = quest}
+            end
+        end
+        
+        -- Check which quests exist in ALL players' quest logs
+        for questID, questInfo in pairs(allQuestIDs) do
+            local sharedByAll = true
+            for i = 2, partySize do
+                local member = allPartyMembers[i]
+                local hasQuest = false
+                for _, quests in pairs(questsByPlayer[member]) do
+                    for _, quest in ipairs(quests) do
+                        if quest.id == questID then
+                            hasQuest = true
+                            break
+                        end
+                    end
+                    if hasQuest then break end
+                end
+                if not hasQuest then
+                    sharedByAll = false
+                    break
+                end
+            end
+            
+            if sharedByAll then
+                local tagName = questInfo.tagName
+                if not sharedQuestsByTag[tagName] then
+                    sharedQuestsByTag[tagName] = {}
+                end
+                table.insert(sharedQuestsByTag[tagName], questInfo.quest)
+            end
+        end
+    end
+    
+    -- Remove shared quests from individual player lists
+    for questTag, sharedQuests in pairs(sharedQuestsByTag) do
+        for _, sharedQuest in ipairs(sharedQuests) do
+            for member, questsByTag in pairs(questsByPlayer) do
+                if questsByTag[questTag] then
+                    for i = #questsByTag[questTag], 1, -1 do
+                        if questsByTag[questTag][i].id == sharedQuest.id then
+                            table.remove(questsByTag[questTag], i)
+                        end
+                    end
+                    -- Clean up empty tag groups
+                    if #questsByTag[questTag] == 0 then
+                        questsByTag[questTag] = nil
                     end
                 end
             end
@@ -354,7 +461,156 @@ function PrintQuestIDs(silentRefresh)
     
     yOff = yOff - ROW_HEIGHT - 4
     
-    -- Render quests grouped by player, then by tag
+    -- First, render shared quests section if there are any
+    local sharedQuestCount = 0
+    for _, quests in pairs(sharedQuestsByTag) do
+        sharedQuestCount = sharedQuestCount + #quests
+    end
+    
+    if sharedQuestCount > 0 then
+        -- Create shared section heading
+        local sharedHeading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        sharedHeading:SetPoint("TOPLEFT", 0, yOff)
+        sharedHeading:SetJustifyH("LEFT")
+        sharedHeading:SetTextColor(0.5, 0.8, 1) -- Light blue for shared quests
+        sharedHeading:SetText(string.format("Shared by All (%d players) - %d quests", partySize, sharedQuestCount))
+        table.insert(questScrollChild.lines, sharedHeading)
+        yOff = yOff - PLAYER_HEADING_HEIGHT
+        
+        -- Sort tags alphabetically
+        local sortedSharedTags = {}
+        for tagName, _ in pairs(sharedQuestsByTag) do
+            table.insert(sortedSharedTags, tagName)
+        end
+        table.sort(sortedSharedTags)
+        
+        -- Render shared quests grouped by tag
+        for _, tagName in ipairs(sortedSharedTags) do
+            local questsInTag = sharedQuestsByTag[tagName]
+            
+            -- Create subheading for this tag
+            local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            subheading:SetPoint("TOPLEFT", 10, yOff)
+            subheading:SetJustifyH("LEFT")
+            subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
+            subheading:SetText(string.format("%s (%d)", tagName, #questsInTag))
+            table.insert(questScrollChild.lines, subheading)
+            yOff = yOff - SUBHEADING_HEIGHT
+            
+            -- Render each shared quest under this tag
+            for _, row in ipairs(questsInTag) do
+        -- ID cell
+        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
+        idFS:SetJustifyH("LEFT")
+        idFS:SetText(row.id)
+        table.insert(questScrollChild.lines, idFS)
+
+        -- Title cell
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
+        titleFS:SetJustifyH("LEFT")
+        -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
+        local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
+        local displayTitle = row.title
+        titleFS:SetText(displayTitle)
+        if titleFS:GetStringWidth() > maxPixelWidth then
+            -- iterative truncate; naive but safe for small number of rows
+            local len = displayTitle:len()
+            while len > 3 and titleFS:GetStringWidth() > maxPixelWidth do
+                len = len - 1
+                displayTitle = displayTitle:sub(1, len) .. "…"
+                titleFS:SetText(displayTitle)
+            end
+        end
+        titleFS.fullTitle = row.title
+        table.insert(questScrollChild.lines, titleFS)
+
+        -- Tracked cell (checkbox) - enabled for shared section to track for all
+        local trackedCB = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
+        trackedCB:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
+        trackedCB:SetSize(20, 20)
+        trackedCB:SetChecked(row.tracked == "Yes")
+        trackedCB.questID = row.id
+        trackedCB:SetScript("OnClick", function(self)
+            local questID = self.questID
+            local isChecked = self:GetChecked()
+            -- First, update local player's tracking
+            if isChecked then
+                -- Add quest to tracker
+                if C_QuestLog.AddQuestWatch then
+                    C_QuestLog.AddQuestWatch(questID)
+                elseif AddQuestWatch then
+                    local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+                    if logIndex then
+                        AddQuestWatch(logIndex)
+                    end
+                end
+            else
+                -- Remove quest from tracker
+                if C_QuestLog.RemoveQuestWatch then
+                    C_QuestLog.RemoveQuestWatch(questID)
+                elseif RemoveQuestWatch then
+                    local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+                    if logIndex then
+                        RemoveQuestWatch(logIndex)
+                    end
+                end
+            end
+            -- Send command to all party members to do the same
+            SendTrackCommand(questID, isChecked)
+            -- Refresh the window to reflect changes
+            RefreshQuestWindowIfVisible()
+            SendSnapshot()
+        end)
+        table.insert(questScrollChild.lines, trackedCB)
+
+        -- In Log cell
+        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
+        inlogFS:SetJustifyH("LEFT")
+        inlogFS:SetText("All")
+        table.insert(questScrollChild.lines, inlogFS)
+
+        -- Ready cell
+        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
+        readyFS:SetJustifyH("LEFT")
+        readyFS:SetText(row.ready)
+        table.insert(questScrollChild.lines, readyFS)
+
+        -- Mouseover tooltip
+        local rowButton = CreateFrame("Button", nil, questScrollChild)
+        rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
+        rowButton:SetPoint("BOTTOMRIGHT", readyFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:SetScript("OnEnter", function()
+            GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
+            GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
+            GameTooltip:AddLine(string.format("Quest ID: %d", row.id), 0.9,0.9,0.9)
+            GameTooltip:AddLine("Shared by all party members", 0.5,0.8,1)
+            if row.category and row.category ~= "" then
+                GameTooltip:AddLine("Category: " .. tostring(row.category), 0.8,0.8,0.8)
+            end
+            if row.tag and row.tag.tagName then
+                GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
+            end
+            GameTooltip:Show()
+        end)
+        rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+        table.insert(questScrollChild.lines, rowButton)
+
+        yOff = yOff - ROW_HEIGHT - 2
+            end
+            
+            -- Add spacing after each tag group
+            yOff = yOff - 6
+        end
+        
+        -- Add spacing after shared section
+        yOff = yOff - 15
+    end
+    
+    -- Then render individual player quests (excluding shared)
     for _, playerDisplayName in ipairs(sortedPlayers) do
         local questsByTag = questsByPlayer[playerDisplayName]
         
@@ -375,7 +631,8 @@ function PrintQuestIDs(silentRefresh)
             if playerDisplayName == UnitName("player") then
                 displayName = displayName .. " (You)"
             end
-            playerHeading:SetText(string.format("%s - %d quests", displayName, totalQuests))
+            local questLabel = totalQuests == 1 and "unique quest" or "unique quests"
+            playerHeading:SetText(string.format("%s - %d %s", displayName, totalQuests, questLabel))
             table.insert(questScrollChild.lines, playerHeading)
             yOff = yOff - PLAYER_HEADING_HEIGHT
             
@@ -600,6 +857,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
             elseif msgType == "SNAP_PART" and payload then
                 ApplySnapshot(sender, payload) -- partial sequences accumulate
                 RefreshQuestWindowIfVisible()
+            elseif msgType == "TRACK" then
+                -- Format: TRACK|version|questID|1/0
+                local questID = tonumber(payload)
+                local action = select(4, strsplit("|", message))
+                if questID and action then
+                    local shouldTrack = action == "1"
+                    HandleTrackCommand(questID, shouldTrack)
+                end
             end
         end
     end
