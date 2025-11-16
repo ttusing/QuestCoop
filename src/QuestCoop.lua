@@ -344,12 +344,41 @@ function PrintQuestIDs(silentRefresh)
         titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
 
-        -- Tracked cell
-        local trackedFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        trackedFS:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
-        trackedFS:SetJustifyH("LEFT")
-        trackedFS:SetText(row.tracked)
-        table.insert(questScrollChild.lines, trackedFS)
+        -- Tracked cell (checkbox)
+        local trackedCB = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
+        trackedCB:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
+        trackedCB:SetSize(20, 20)
+        trackedCB:SetChecked(row.tracked == "Yes")
+        trackedCB.questID = row.id
+        trackedCB:SetScript("OnClick", function(self)
+            local questID = self.questID
+            local isChecked = self:GetChecked()
+            if isChecked then
+                -- Add quest to tracker
+                if C_QuestLog.AddQuestWatch then
+                    C_QuestLog.AddQuestWatch(questID)
+                elseif AddQuestWatch then
+                    local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+                    if logIndex then
+                        AddQuestWatch(logIndex)
+                    end
+                end
+            else
+                -- Remove quest from tracker
+                if C_QuestLog.RemoveQuestWatch then
+                    C_QuestLog.RemoveQuestWatch(questID)
+                elseif RemoveQuestWatch then
+                    local logIndex = C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(questID)
+                    if logIndex then
+                        RemoveQuestWatch(logIndex)
+                    end
+                end
+            end
+            -- Refresh the window to reflect changes
+            RefreshQuestWindowIfVisible()
+            SendSnapshot()
+        end)
+        table.insert(questScrollChild.lines, trackedCB)
 
         -- In Log cell (always Yes because we enumerate quest log)
         local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
