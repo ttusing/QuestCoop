@@ -1,7 +1,7 @@
 # QuestCoop - Party Quest Coordination Addon
 
 ## Overview
-QuestCoop is a World of Warcraft addon that helps party members coordinate their quests by sharing quest information in real-time. Perfect for leveling with friends, dungeon groups, or any party content where quest coordination matters.
+QuestCoop is a World of Warcraft addon that helps party members coordinate their quests by sharing quest information in real-time. Perfect for leveling with friends or any party content where quest coordination matters.
 
 ![QuestCoop Interface](screenshot.png)
 
@@ -16,16 +16,13 @@ QuestCoop is a World of Warcraft addon that helps party members coordinate their
 ### 🎯 Party-Wide Quest Tracking
 - **Coordinated Tracking**: When you track a shared quest, all party members automatically track it
 - **One-Click Coordination**: Enable tracking for the entire party from the shared quests section
-- **Smart Organization**: Quests grouped by type (Dungeon, Raid, Important Quest, etc.)
+- **Smart Organization**: Quests grouped by type (Dungeon, Zone , etc.)
 
 ### 📋 Quest Information Display
 - **Quest ID & Title**: See the quest name and ID for easy reference
 - **Tracking Status**: See which quests you're actively tracking
 - **Completion Status**: Know when quests are ready to turn in
 - **Tag Organization**: Quests automatically grouped by type for easy navigation
-
-### 🚫 Privacy Features
-- **Hidden Quest Filtering**: Hidden quests are automatically excluded from sharing
 
 ## Installation
 1. Download the QuestCoop addon
