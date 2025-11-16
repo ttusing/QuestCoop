@@ -79,26 +79,38 @@ end
 
 local function ApplySnapshot(fromPlayer, snapshotStr)
     partyQuestStates[fromPlayer] = partyQuestStates[fromPlayer] or {}
+    -- Clear previous snapshot for this player to detect removed quests
+    local newSnapshot = {}
     for seg in snapshotStr:gmatch("[^;]+") do
         local qid, tracked, ready = seg:match("^(%d+),(%d),(%d)$")
         if qid then
             qid = tonumber(qid)
+            newSnapshot[qid] = true
             partyQuestStates[fromPlayer][qid] = partyQuestStates[fromPlayer][qid] or {}
             local entry = partyQuestStates[fromPlayer][qid]
             entry.has = true
             entry.tracked = tracked == "1"
             entry.ready = ready == "1"
-            -- Title will be filled lazily from our own view when building tooltip
+            -- Title will be filled from our quest log if we have the quest, or stored from other sources
+            local qi = C_QuestLog.GetQuestIDForLogIndex and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(qid)
+            if qi then
+                local questInfo = C_QuestLog.GetInfo(qi)
+                if questInfo and questInfo.title then
+                    entry.title = questInfo.title
+                end
+            end
+            if not entry.title then
+                entry.title = ("(Quest " .. qid .. ")")
+            end
         end
     end
-end
-
-local function CleanupMissing(fromPlayer, snapshotTable)
+    -- Remove quests that are no longer in the snapshot
     local current = partyQuestStates[fromPlayer]
-    if not current then return end
-    for qid,_ in pairs(current) do
-        if not snapshotTable[qid] then
-            current[qid] = nil -- remove quests no longer present
+    if current then
+        for qid,_ in pairs(current) do
+            if not newSnapshot[qid] then
+                current[qid] = nil
+            end
         end
     end
 end
@@ -190,8 +202,13 @@ end
 function PrintQuestIDs(silentRefresh)
     Log("PrintQuestIDs START")
     CreateQuestWindow()
-    -- Build structured rows organized by tag
-    local questsByTag = {} -- questsByTag[tagName] = {quest1, quest2, ...}
+    -- Build structured rows organized by player and tag
+    -- questsByPlayer[playerName][tagName] = {quest1, quest2, ...}
+    local questsByPlayer = {}
+    local playerName = UnitName("player")
+    questsByPlayer[playerName] = {}
+    
+    -- First, collect local player's quests
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
     Log("PrintQuestIDs numEntries", numEntries)
     local shiftDown = IsShiftKeyDown and IsShiftKeyDown() and not silentRefresh
@@ -236,11 +253,11 @@ function PrintQuestIDs(silentRefresh)
                     local tagName = questTagInfo and questTagInfo.tagName or "No Tag"
                     
                     -- Initialize tag group if needed
-                    if not questsByTag[tagName] then
-                        questsByTag[tagName] = {}
+                    if not questsByPlayer[playerName][tagName] then
+                        questsByPlayer[playerName][tagName] = {}
                     end
                     
-                    table.insert(questsByTag[tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory})
+                    table.insert(questsByPlayer[playerName][tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, isLocal = true})
                 end
                 local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
                 Log("PrintQuestIDs row", chatLine)
@@ -248,6 +265,35 @@ function PrintQuestIDs(silentRefresh)
             end
         end
     end
+    
+    -- Now collect party members' quests
+    for partyMember, quests in pairs(partyQuestStates) do
+        if partyMember ~= playerName then
+            questsByPlayer[partyMember] = {}
+            for questID, questData in pairs(quests) do
+                if questData.has then
+                    local title = questData.title or ("(Quest " .. questID .. ")")
+                    local trackText = questData.tracked and "Yes" or "No"
+                    local readyText = questData.ready and "Yes" or "No"
+                    
+                    -- Try to get tag info from our own quest log if we have this quest
+                    local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
+                    local tagName = questTagInfo and questTagInfo.tagName or "No Tag"
+                    
+                    -- Skip hidden quests for party members too
+                    if not (questTagInfo and questTagInfo.tagName and questTagInfo.tagName:lower() == "hidden quest") then
+                        -- Initialize tag group if needed
+                        if not questsByPlayer[partyMember][tagName] then
+                            questsByPlayer[partyMember][tagName] = {}
+                        end
+                        
+                        table.insert(questsByPlayer[partyMember][tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = "", isLocal = false})
+                    end
+                end
+            end
+        end
+    end
+    
     -- Clear previous row frames / fontstrings
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
     wipe(questScrollChild.lines)
@@ -259,15 +305,21 @@ function PrintQuestIDs(silentRefresh)
     local COL_INLOG_X = 340
     local COL_READY_X = 400
     local ROW_HEIGHT = 14
+    local PLAYER_HEADING_HEIGHT = 22
     local SUBHEADING_HEIGHT = 18
     local yOff = -2
     
-    -- Sort tags alphabetically for consistent display
-    local sortedTags = {}
-    for tagName, _ in pairs(questsByTag) do
-        table.insert(sortedTags, tagName)
+    -- Sort players: local player first, then others alphabetically
+    local sortedPlayers = {}
+    for playerName, _ in pairs(questsByPlayer) do
+        table.insert(sortedPlayers, playerName)
     end
-    table.sort(sortedTags)
+    table.sort(sortedPlayers, function(a, b)
+        local localPlayer = UnitName("player")
+        if a == localPlayer then return true end
+        if b == localPlayer then return false end
+        return a < b
+    end)
     
     -- Header row with column labels
     local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
@@ -302,21 +354,53 @@ function PrintQuestIDs(silentRefresh)
     
     yOff = yOff - ROW_HEIGHT - 4
     
-    -- Render quests grouped by tag with subheadings
-    for _, tagName in ipairs(sortedTags) do
-        local questsInTag = questsByTag[tagName]
+    -- Render quests grouped by player, then by tag
+    for _, playerDisplayName in ipairs(sortedPlayers) do
+        local questsByTag = questsByPlayer[playerDisplayName]
         
-        -- Create subheading for this tag
-        local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        subheading:SetPoint("TOPLEFT", 0, yOff)
-        subheading:SetJustifyH("LEFT")
-        subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
-        subheading:SetText(string.format("%s (%d)", tagName, #questsInTag))
-        table.insert(questScrollChild.lines, subheading)
-        yOff = yOff - SUBHEADING_HEIGHT
+        -- Count total quests for this player
+        local totalQuests = 0
+        for _, quests in pairs(questsByTag) do
+            totalQuests = totalQuests + #quests
+        end
         
-        -- Render each quest under this tag
-        for _, row in ipairs(questsInTag) do
+        -- Only display players with quests
+        if totalQuests > 0 then
+            -- Create player name heading
+            local playerHeading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            playerHeading:SetPoint("TOPLEFT", 0, yOff)
+            playerHeading:SetJustifyH("LEFT")
+            playerHeading:SetTextColor(0.3, 1, 0.3) -- Bright green for player names
+            local displayName = ShortName(playerDisplayName)
+            if playerDisplayName == UnitName("player") then
+                displayName = displayName .. " (You)"
+            end
+            playerHeading:SetText(string.format("%s - %d quests", displayName, totalQuests))
+            table.insert(questScrollChild.lines, playerHeading)
+            yOff = yOff - PLAYER_HEADING_HEIGHT
+            
+            -- Sort tags alphabetically for consistent display
+            local sortedTags = {}
+            for tagName, _ in pairs(questsByTag) do
+                table.insert(sortedTags, tagName)
+            end
+            table.sort(sortedTags)
+            
+            -- Render quests grouped by tag within this player
+            for _, tagName in ipairs(sortedTags) do
+                local questsInTag = questsByTag[tagName]
+                
+                -- Create subheading for this tag
+                local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                subheading:SetPoint("TOPLEFT", 10, yOff)
+                subheading:SetJustifyH("LEFT")
+                subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
+                subheading:SetText(string.format("%s (%d)", tagName, #questsInTag))
+                table.insert(questScrollChild.lines, subheading)
+                yOff = yOff - SUBHEADING_HEIGHT
+                
+                -- Render each quest under this tag
+                for _, row in ipairs(questsInTag) do
         -- ID cell
         local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
@@ -434,7 +518,12 @@ function PrintQuestIDs(silentRefresh)
         
         -- Add spacing after each tag group
         yOff = yOff - 6
-    end
+            end -- end for tags loop
+            
+            -- Add spacing after each player
+            yOff = yOff - 10
+        end -- end if totalQuests > 0
+    end -- end for players loop
 
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
