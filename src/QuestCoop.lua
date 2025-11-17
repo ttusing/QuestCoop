@@ -113,23 +113,7 @@ local function ApplySnapshot(fromPlayer, snapshotStr)
             end
         end
     end
-end
-
--- Debug flag
-local DEBUG = true
-local function Log(...)
-    if not DEBUG then return end
-    print("QuestCoopDBG:", ...)
-end
-
-local function SafeCall(label, func)
-    local ok, err = pcall(func)
-    if ok then
-        Log("SafeCall success", label)
-    else
-        Log("SafeCall ERROR", label, err)
-    end
-end
+ end
 
 -- Generic helper to make a frame draggable
 local function MakeDraggable(frame, key)
@@ -139,7 +123,6 @@ local function MakeDraggable(frame, key)
     frame:RegisterForDrag("LeftButton")
     frame:SetClampedToScreen(true)
     frame:SetScript("OnDragStart", function(self)
-        Log("DragStart", key)
         self:StartMoving()
     end)
     frame:SetScript("OnDragStop", function(self)
@@ -148,8 +131,6 @@ local function MakeDraggable(frame, key)
         if key then
             local point, relativeTo, relativePoint, xOfs, yOfs = self:GetPoint()
             QuestCoopDB[key] = {point = point, relativePoint = relativePoint, x = xOfs, y = yOfs}
-            print(string.format("QuestCoop: Saved position for %s: %s %d %d", key, relativePoint, xOfs, yOfs))
-            Log("DragStop saved", key, point, relativePoint, xOfs, yOfs)
         end
     end)
 end
@@ -185,8 +166,6 @@ local function CreateQuestWindow()
     questScrollChild:SetSize(520, 1) -- widened for additional columns
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
-
-    Log("QuestWindow created")
 end
 
 -- Internal helper to refresh quest window if shown (silent)
@@ -203,11 +182,9 @@ local function SendTrackCommand(questID, shouldTrack)
     local action = shouldTrack and "1" or "0"
     local msg = string.format("TRACK|%s|%d|%s", ADDON_VERSION, questID, action)
     C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
-    Log("Sent track command", questID, shouldTrack)
 end
 
 local function HandleTrackCommand(questID, shouldTrack)
-    Log("Handling track command", questID, shouldTrack)
     if shouldTrack then
         -- Add quest to tracker
         if C_QuestLog.AddQuestWatch then
@@ -238,7 +215,6 @@ end
 -- PrintQuestIDs(silentRefresh)
 -- When silentRefresh is true, we don't echo to chat even if shift is down.
 function PrintQuestIDs(silentRefresh)
-    Log("PrintQuestIDs START")
     CreateQuestWindow()
     -- Build structured rows organized by player and tag
     -- questsByPlayer[playerName][tagName] = {quest1, quest2, ...}
@@ -248,14 +224,9 @@ function PrintQuestIDs(silentRefresh)
     
     -- First, collect local player's quests
     local numEntries = C_QuestLog.GetNumQuestLogEntries()
-    Log("PrintQuestIDs numEntries", numEntries)
     local shiftDown = IsShiftKeyDown and IsShiftKeyDown() and not silentRefresh
-    if shiftDown and not silentRefresh then
-        print("QuestCoop: (Shift) Also printing quest IDs to chat...")
-    end
     for i = 1, numEntries do
         local questInfo = C_QuestLog.GetInfo(i)
-        Log("PrintQuestIDs loop", i, questInfo and questInfo.title, questInfo and questInfo.isHeader)
         if questInfo and not questInfo.isHeader then
             local questID = questInfo.questID
             if questID then
@@ -284,7 +255,7 @@ function PrintQuestIDs(silentRefresh)
                 local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
                 -- Skip quests with "hidden quest" tag
                 if questTagInfo and questTagInfo.tagName and questTagInfo.tagName:lower() == "hidden quest" then
-                    Log("Skipping hidden quest", questID, title)
+                    -- Skip hidden quests
                 else
                     local zoneOrSort = questInfo.campaignID and ("Campaign") or (questInfo.zoneOrSort or "")
                     local detailedCategory = questInfo.header and questInfo.header or zoneOrSort
@@ -297,9 +268,10 @@ function PrintQuestIDs(silentRefresh)
                     
                     table.insert(questsByPlayer[playerName][tagName], {id = questID, title = title, tracked = trackText, inlog = "Yes", ready = readyText, tag = questTagInfo, category = detailedCategory, isLocal = true})
                 end
-                local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
-                Log("PrintQuestIDs row", chatLine)
-                if shiftDown and not silentRefresh then print("QuestCoop:", chatLine) end
+                if shiftDown and not silentRefresh then
+                    local chatLine = string.format("%d - %s (Tracked:%s Ready:%s)", questID, title, trackText, readyText)
+                    print("QuestCoop:", chatLine)
+                end
             end
         end
     end
@@ -784,67 +756,42 @@ function PrintQuestIDs(silentRefresh)
 
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
-    Log("QuestWindow rows populated", "height", totalHeight)
     questWindow:Show()
-    Log("QuestWindow populated with tags")
-    Log("PrintQuestIDs END")
 end
 
 -- Create frame to handle events
 local frame = CreateFrame("Frame")
-Log("Frame created")
 frame:RegisterEvent("PLAYER_LOGIN")
-Log("Registered PLAYER_LOGIN")
 frame:SetScript("OnEvent", function(self, event, ...)
-    Log("OnEvent", event)
-    print("QuestCoop: OnEvent called with event: " .. event)
     if event == "PLAYER_LOGIN" then
-        print("QuestCoop: PLAYER_LOGIN event detected") -- Debug message
-        Log("Handle PLAYER_LOGIN")
         EnsurePrefix()
         
         -- Set up click handler for the button defined in XML
     if not QuestCoopDB then QuestCoopDB = {} end
     local printButton = _G["PrintQuestIDsButton"]
-    Log("Fetched printButton", printButton ~= nil)
 
         if printButton then
-            Log("PrintQuestIDsButton setup")
             printButton:SetScript("OnClick", function(self, button)
-                Log("PrintQuestIDsButton clicked")
                 PrintQuestIDs()
             end)
             printButton:ClearAllPoints()
             if QuestCoopDB.printButtonPos then
                 local pos = QuestCoopDB.printButtonPos
                 printButton:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or -40)
-                print("QuestCoop: Restored PrintQuestIDsButton position")
             else
                 printButton:SetPoint("CENTER", UIParent, "CENTER", 0, -40)
-                print("QuestCoop: Using default PrintQuestIDsButton position")
             end
-            SafeCall("PrintQuestIDsButton SetUserPlaced", function() printButton:SetUserPlaced(true) end)
-            local isUserPlaced2 = printButton.IsUserPlaced and printButton:IsUserPlaced() or "(method missing)"
-            Log("PrintQuestIDsButton IsUserPlaced", isUserPlaced2)
-            SafeCall("PrintQuestIDsButton Show", function() printButton:Show() end)
-            Log("PrintQuestIDsButton IsShown", printButton:IsShown())
             MakeDraggable(printButton, "printButtonPos")
-            Log("PrintQuestIDsButton MakeDraggable complete")
-            Log("PrintQuestIDsButton draggable ready")
-            print("QuestCoop: PrintQuestIDsButton positioned and shown")
-        else
-            print("QuestCoop: PrintQuestIDsButton not found")
-            Log("PrintQuestIDsButton missing")
+            printButton:SetUserPlaced(true)
+            printButton:Show()
         end
     end
     -- Auto-refresh triggers
     if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
-        Log("AutoRefresh event", event)
         RefreshQuestWindowIfVisible()
         SendSnapshot()
     end
     if event == "GROUP_ROSTER_UPDATE" then
-        Log("Group roster changed")
         SendSnapshot() -- share current state when group changes
     end
     if event == "CHAT_MSG_ADDON" then
@@ -877,4 +824,3 @@ frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
-Log("Registered quest update events")
