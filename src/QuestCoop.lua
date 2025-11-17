@@ -4,6 +4,12 @@ local ADDON_VERSION = "1"
 
 -- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
 local partyQuestStates = {}
+
+-- Throttling for SendSnapshot
+local snapshotThrottleTimer = nil
+local snapshotPending = false
+local SNAPSHOT_THROTTLE_DELAY = 2.5 -- seconds
+
 local function ShortName(name)
     if not name then return "?" end
     return name:match("^[^%-]+") or name
@@ -51,6 +57,20 @@ end
 
 local function SendSnapshot()
     if not IsInGroup() then return end
+    
+    -- Throttle: If already pending, just mark it and return
+    if snapshotPending then
+        return
+    end
+    
+    -- If throttle timer is active, schedule for later
+    if snapshotThrottleTimer then
+        snapshotPending = true
+        return
+    end
+    
+    -- Execute the snapshot
+    snapshotPending = false
     EnsurePrefix()
     local snapshot = BuildLocalSnapshot()
     local msg = SerializeSnapshot(snapshot)
@@ -59,10 +79,11 @@ local function SendSnapshot()
         local header = "SNAP_PART|"..ADDON_VERSION
         local current = {}
         local length = #header
+        local chunks = {}
         for qid,data in pairs(snapshot) do
             local seg = string.format("%d,%d,%d;", qid, data.tracked and 1 or 0, data.ready and 1 or 0)
             if length + #seg > 240 then
-                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+                table.insert(chunks, header.."|"..table.concat(current, ""))
                 current = {}
                 length = #header
             end
@@ -70,11 +91,27 @@ local function SendSnapshot()
             length = length + #seg
         end
         if #current > 0 then
-            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+            table.insert(chunks, header.."|"..table.concat(current, ""))
+        end
+        -- Send chunks with delays to avoid rate limiting
+        for i, chunk in ipairs(chunks) do
+            C_Timer.After((i-1) * 0.15, function()
+                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, chunk, "PARTY")
+            end)
         end
     else
         C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
     end
+    
+    -- Set throttle timer
+    snapshotThrottleTimer = C_Timer.NewTimer(SNAPSHOT_THROTTLE_DELAY, function()
+        snapshotThrottleTimer = nil
+        -- If another snapshot was requested during throttle, send it now
+        if snapshotPending then
+            snapshotPending = false
+            SendSnapshot()
+        end
+    end)
 end
 
 local function ApplySnapshot(fromPlayer, snapshotStr)
@@ -533,7 +570,6 @@ function PrintQuestIDs(silentRefresh)
             SendTrackCommand(questID, isChecked)
             -- Refresh the window to reflect changes
             RefreshQuestWindowIfVisible()
-            SendSnapshot()
         end)
         table.insert(questScrollChild.lines, trackedCB)
 
@@ -689,7 +725,6 @@ function PrintQuestIDs(silentRefresh)
             end
             -- Refresh the window to reflect changes
             RefreshQuestWindowIfVisible()
-            SendSnapshot()
         end)
         table.insert(questScrollChild.lines, trackedCB)
 
@@ -787,7 +822,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end
     end
     -- Auto-refresh triggers
-    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
+    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" then
         RefreshQuestWindowIfVisible()
         SendSnapshot()
     end
@@ -821,6 +856,5 @@ end)
 frame:RegisterEvent("QUEST_ACCEPTED")
 frame:RegisterEvent("QUEST_REMOVED")
 frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
-frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
