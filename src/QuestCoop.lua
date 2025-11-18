@@ -2,11 +2,43 @@ local addonName, addon = ...
 local ADDON_PREFIX = addonName or "QuestCoop"
 local ADDON_VERSION = "1"
 
+-- Default settings
+local DEFAULT_SETTINGS = {
+    textSize = "medium", -- small, medium, large
+}
+
 -- Party quest state cache: partyQuestStates[playerName][questID] = {tracked=bool, ready=bool, has=true, title=title}
 local partyQuestStates = {}
 local function ShortName(name)
     if not name then return "?" end
     return name:match("^[^%-]+") or name
+end
+
+-- Settings management
+local function GetSetting(key)
+    if not QuestCoopDB then QuestCoopDB = {} end
+    if not QuestCoopDB.settings then QuestCoopDB.settings = {} end
+    if QuestCoopDB.settings[key] ~= nil then
+        return QuestCoopDB.settings[key]
+    end
+    return DEFAULT_SETTINGS[key]
+end
+
+local function SetSetting(key, value)
+    if not QuestCoopDB then QuestCoopDB = {} end
+    if not QuestCoopDB.settings then QuestCoopDB.settings = {} end
+    QuestCoopDB.settings[key] = value
+end
+
+local function GetFontSize()
+    local size = GetSetting("textSize")
+    if size == "small" then
+        return "GameFontHighlightSmall", "GameFontNormalSmall", "GameFontNormal"
+    elseif size == "large" then
+        return "GameFontNormal", "GameFontNormalLarge", "GameFontNormalHuge"
+    else -- medium
+        return "GameFontHighlightSmall", "GameFontNormal", "GameFontNormalLarge"
+    end
 end
 
 local function EnsurePrefix()
@@ -135,6 +167,9 @@ local function MakeDraggable(frame, key)
     end)
 end
 
+-- Forward declaration for RefreshQuestWindowIfVisible (defined later)
+local RefreshQuestWindowIfVisible
+
 -- Quest ID window (created lazily)
 local questWindow, questScrollFrame, questScrollChild
 local function CreateQuestWindow()
@@ -168,8 +203,78 @@ local function CreateQuestWindow()
     questScrollChild.lines = {}
 end
 
+-- Settings panel
+local settingsPanel
+local function CreateSettingsPanel()
+    if settingsPanel then return settingsPanel end
+    
+    settingsPanel = CreateFrame("Frame", "QuestCoopSettingsPanel", UIParent)
+    settingsPanel.name = "QuestCoop"
+    
+    local title = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
+    title:SetPoint("TOPLEFT", 16, -16)
+    title:SetText("QuestCoop Settings")
+    
+    local subtitle = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -8)
+    subtitle:SetText("Configure quest display and synchronization options")
+    
+    -- Text Size Section
+    local textSizeLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    textSizeLabel:SetPoint("TOPLEFT", subtitle, "BOTTOMLEFT", 0, -24)
+    textSizeLabel:SetText("Text Size:")
+    
+    local textSizeDropdown = CreateFrame("Frame", "QuestCoopTextSizeDropdown", settingsPanel, "UIDropDownMenuTemplate")
+    textSizeDropdown:SetPoint("TOPLEFT", textSizeLabel, "BOTTOMLEFT", -15, -8)
+    
+    local textSizeOptions = {
+        {text = "Small", value = "small"},
+        {text = "Medium", value = "medium"},
+        {text = "Large", value = "large"},
+    }
+    
+    local function TextSizeDropdown_OnClick(self)
+        SetSetting("textSize", self.value)
+        UIDropDownMenu_SetText(textSizeDropdown, self:GetText())
+        RefreshQuestWindowIfVisible()
+    end
+    
+    local function TextSizeDropdown_Initialize(self, level)
+        local info = UIDropDownMenu_CreateInfo()
+        for _, option in ipairs(textSizeOptions) do
+            info.text = option.text
+            info.value = option.value
+            info.func = TextSizeDropdown_OnClick
+            info.checked = (GetSetting("textSize") == option.value)
+            UIDropDownMenu_AddButton(info)
+        end
+    end
+    
+    UIDropDownMenu_Initialize(textSizeDropdown, TextSizeDropdown_Initialize)
+    UIDropDownMenu_SetWidth(textSizeDropdown, 120)
+    
+    -- Set initial text
+    local currentSize = GetSetting("textSize")
+    for _, option in ipairs(textSizeOptions) do
+        if option.value == currentSize then
+            UIDropDownMenu_SetText(textSizeDropdown, option.text)
+            break
+        end
+    end
+    
+    -- Register with Interface Options
+    if InterfaceOptions_AddCategory then
+        InterfaceOptions_AddCategory(settingsPanel)
+    elseif Settings and Settings.RegisterCanvasLayoutCategory then
+        local category = Settings.RegisterCanvasLayoutCategory(settingsPanel, settingsPanel.name)
+        Settings.RegisterAddOnCategory(category)
+    end
+    
+    return settingsPanel
+end
+
 -- Internal helper to refresh quest window if shown (silent)
-local function RefreshQuestWindowIfVisible()
+RefreshQuestWindowIfVisible = function()
     if not questWindow or not questWindow:IsShown() then return end
     -- Call PrintQuestIDs but without shift printing and without forcing visibility changes beyond refresh.
     PrintQuestIDs(true) -- pass silent flag
@@ -279,7 +384,8 @@ function PrintQuestIDs(silentRefresh)
     -- Now collect party members' quests (excluding local player to avoid duplication)
     for partyMember, quests in pairs(partyQuestStates) do
         -- Skip if this is the local player (avoid duplicating our own quests)
-        if partyMember ~= playerName then
+        -- Compare short names to handle realm suffixes
+        if ShortName(partyMember) ~= ShortName(playerName) then
             questsByPlayer[partyMember] = {}
             for questID, questData in pairs(quests) do
                 if questData.has then
@@ -383,9 +489,12 @@ function PrintQuestIDs(silentRefresh)
     local COL_TRACKED_X = 280
     local COL_INLOG_X = 340
     local COL_READY_X = 400
-    local ROW_HEIGHT = 14
-    local PLAYER_HEADING_HEIGHT = 22
-    local SUBHEADING_HEIGHT = 18
+    
+    -- Adjust row height and spacing based on text size
+    local textSize = GetSetting("textSize")
+    local ROW_HEIGHT = (textSize == "small" and 14) or (textSize == "large" and 18) or 14
+    local PLAYER_HEADING_HEIGHT = (textSize == "large" and 26) or 22
+    local SUBHEADING_HEIGHT = (textSize == "large" and 20) or 18
     local yOff = -2
     
     -- Sort players: local player first, then others alphabetically
@@ -400,32 +509,35 @@ function PrintQuestIDs(silentRefresh)
         return a < b
     end)
     
+    -- Get font sizes based on settings
+    local fontSmall, fontNormal, fontLarge = GetFontSize()
+    
     -- Header row with column labels
-    local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerID:SetPoint("TOPLEFT", COL_ID_X, yOff)
     headerID:SetJustifyH("LEFT")
     headerID:SetText("ID")
     table.insert(questScrollChild.lines, headerID)
 
-    local headerTitle = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local headerTitle = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerTitle:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
     headerTitle:SetJustifyH("LEFT")
     headerTitle:SetText("Title")
     table.insert(questScrollChild.lines, headerTitle)
 
-    local headerTracked = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local headerTracked = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerTracked:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
     headerTracked:SetJustifyH("LEFT")
     headerTracked:SetText("Trk")
     table.insert(questScrollChild.lines, headerTracked)
 
-    local headerInLog = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local headerInLog = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerInLog:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
     headerInLog:SetJustifyH("LEFT")
     headerInLog:SetText("Log")
     table.insert(questScrollChild.lines, headerInLog)
 
-    local headerReady = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+    local headerReady = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerReady:SetPoint("TOPLEFT", COL_READY_X, yOff)
     headerReady:SetJustifyH("LEFT")
     headerReady:SetText("Ready")
@@ -441,7 +553,7 @@ function PrintQuestIDs(silentRefresh)
     
     if sharedQuestCount > 0 then
         -- Create shared section heading
-        local sharedHeading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+        local sharedHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
         sharedHeading:SetPoint("TOPLEFT", 0, yOff)
         sharedHeading:SetJustifyH("LEFT")
         sharedHeading:SetTextColor(0.5, 0.8, 1) -- Light blue for shared quests
@@ -461,7 +573,7 @@ function PrintQuestIDs(silentRefresh)
             local questsInTag = sharedQuestsByTag[tagName]
             
             -- Create subheading for this tag
-            local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
             subheading:SetPoint("TOPLEFT", 10, yOff)
             subheading:SetJustifyH("LEFT")
             subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
@@ -472,16 +584,17 @@ function PrintQuestIDs(silentRefresh)
             -- Render each shared quest under this tag
             for _, row in ipairs(questsInTag) do
         -- ID cell
-        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
         idFS:SetJustifyH("LEFT")
         idFS:SetText(row.id)
         table.insert(questScrollChild.lines, idFS)
 
         -- Title cell
-        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
+        titleFS:SetTextColor(1, 1, 1) -- White text
         -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
         local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
         local displayTitle = row.title
@@ -538,14 +651,14 @@ function PrintQuestIDs(silentRefresh)
         table.insert(questScrollChild.lines, trackedCB)
 
         -- In Log cell
-        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
         inlogFS:SetJustifyH("LEFT")
         inlogFS:SetText("All")
         table.insert(questScrollChild.lines, inlogFS)
 
         -- Ready cell
-        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
         readyFS:SetJustifyH("LEFT")
         readyFS:SetText(row.ready)
@@ -595,7 +708,7 @@ function PrintQuestIDs(silentRefresh)
         -- Only display players with quests
         if totalQuests > 0 then
             -- Create player name heading
-            local playerHeading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+            local playerHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
             playerHeading:SetPoint("TOPLEFT", 0, yOff)
             playerHeading:SetJustifyH("LEFT")
             playerHeading:SetTextColor(0.3, 1, 0.3) -- Bright green for player names
@@ -620,7 +733,7 @@ function PrintQuestIDs(silentRefresh)
                 local questsInTag = questsByTag[tagName]
                 
                 -- Create subheading for this tag
-                local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                local subheading = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
                 subheading:SetPoint("TOPLEFT", 10, yOff)
                 subheading:SetJustifyH("LEFT")
                 subheading:SetTextColor(1, 0.82, 0) -- Gold color for subheadings
@@ -631,16 +744,17 @@ function PrintQuestIDs(silentRefresh)
                 -- Render each quest under this tag
                 for _, row in ipairs(questsInTag) do
         -- ID cell
-        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
         idFS:SetJustifyH("LEFT")
         idFS:SetText(row.id)
         table.insert(questScrollChild.lines, idFS)
 
         -- Title cell
-        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
+        titleFS:SetTextColor(1, 1, 1) -- White text
         -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
         local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
         local displayTitle = row.title
@@ -694,14 +808,14 @@ function PrintQuestIDs(silentRefresh)
         table.insert(questScrollChild.lines, trackedCB)
 
         -- In Log cell (always Yes because we enumerate quest log)
-        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
         inlogFS:SetJustifyH("LEFT")
         inlogFS:SetText(row.inlog)
         table.insert(questScrollChild.lines, inlogFS)
 
         -- Ready cell (quest complete -> can turn in)
-        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
         readyFS:SetJustifyH("LEFT")
         readyFS:SetText(row.ready)
@@ -766,9 +880,39 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         EnsurePrefix()
         
+        -- Initialize settings
+        if not QuestCoopDB then QuestCoopDB = {} end
+        if not QuestCoopDB.settings then
+            QuestCoopDB.settings = {}
+            for k, v in pairs(DEFAULT_SETTINGS) do
+                if QuestCoopDB.settings[k] == nil then
+                    QuestCoopDB.settings[k] = v
+                end
+            end
+        end
+        
+        -- Create settings panel
+        CreateSettingsPanel()
+        
+        -- Register slash command
+        SLASH_QUESTCOOP1 = "/questcoop"
+        SLASH_QUESTCOOP2 = "/qc"
+        SlashCmdList["QUESTCOOP"] = function(msg)
+            msg = msg:lower():trim()
+            if msg == "settings" or msg == "config" or msg == "options" then
+                if InterfaceOptionsFrame_OpenToCategory then
+                    InterfaceOptionsFrame_OpenToCategory(settingsPanel)
+                    InterfaceOptionsFrame_OpenToCategory(settingsPanel) -- Call twice for proper navigation
+                elseif Settings and Settings.OpenToCategory then
+                    Settings.OpenToCategory(settingsPanel.name)
+                end
+            else
+                PrintQuestIDs()
+            end
+        end
+        
         -- Set up click handler for the button defined in XML
-    if not QuestCoopDB then QuestCoopDB = {} end
-    local printButton = _G["PrintQuestIDsButton"]
+        local printButton = _G["PrintQuestIDsButton"]
 
         if printButton then
             printButton:SetScript("OnClick", function(self, button)
