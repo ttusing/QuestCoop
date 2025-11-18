@@ -167,6 +167,9 @@ local function MakeDraggable(frame, key)
     end)
 end
 
+-- Forward declaration for RefreshQuestWindowIfVisible (defined later)
+local RefreshQuestWindowIfVisible
+
 -- Quest ID window (created lazily)
 local questWindow, questScrollFrame, questScrollChild
 local function CreateQuestWindow()
@@ -271,7 +274,7 @@ local function CreateSettingsPanel()
 end
 
 -- Internal helper to refresh quest window if shown (silent)
-local function RefreshQuestWindowIfVisible()
+RefreshQuestWindowIfVisible = function()
     if not questWindow or not questWindow:IsShown() then return end
     -- Call PrintQuestIDs but without shift printing and without forcing visibility changes beyond refresh.
     PrintQuestIDs(true) -- pass silent flag
@@ -486,9 +489,12 @@ function PrintQuestIDs(silentRefresh)
     local COL_TRACKED_X = 280
     local COL_INLOG_X = 340
     local COL_READY_X = 400
-    local ROW_HEIGHT = 14
-    local PLAYER_HEADING_HEIGHT = 22
-    local SUBHEADING_HEIGHT = 18
+    
+    -- Adjust row height and spacing based on text size
+    local textSize = GetSetting("textSize")
+    local ROW_HEIGHT = (textSize == "small" and 14) or (textSize == "large" and 18) or 14
+    local PLAYER_HEADING_HEIGHT = (textSize == "large" and 26) or 22
+    local SUBHEADING_HEIGHT = (textSize == "large" and 20) or 18
     local yOff = -2
     
     -- Sort players: local player first, then others alphabetically
@@ -585,9 +591,10 @@ function PrintQuestIDs(silentRefresh)
         table.insert(questScrollChild.lines, idFS)
 
         -- Title cell
-        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
+        titleFS:SetTextColor(1, 1, 1) -- White text
         -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
         local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
         local displayTitle = row.title
@@ -744,9 +751,10 @@ function PrintQuestIDs(silentRefresh)
         table.insert(questScrollChild.lines, idFS)
 
         -- Title cell
-        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+        local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
+        titleFS:SetTextColor(1, 1, 1) -- White text
         -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
         local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
         local displayTitle = row.title
