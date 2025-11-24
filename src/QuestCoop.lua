@@ -517,6 +517,21 @@ function PrintQuestIDs(silentRefresh)
         local rowButton = CreateFrame("Button", nil, questScrollChild)
         rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
         rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        rowButton:SetScript("OnClick", function(self, button)
+            if button == "RightButton" then
+                -- Create context menu using modern API
+                MenuUtil.CreateContextMenu(UIParent, function(owner, rootDescription)
+                    rootDescription:CreateTitle(row.title)
+                    rootDescription:CreateButton("Share Quest", function()
+                        -- Select the quest in the quest log first, then share it
+                        C_QuestLog.SetSelectedQuest(row.id)
+                        QuestLogPushQuest()
+                    end)
+                    rootDescription:CreateButton("Cancel", function() end)
+                end)
+            end
+        end)
         rowButton:SetScript("OnEnter", function()
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
@@ -612,6 +627,21 @@ function PrintQuestIDs(silentRefresh)
         local rowButton = CreateFrame("Button", nil, questScrollChild)
         rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
         rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+        rowButton:SetScript("OnClick", function(self, button)
+            if button == "RightButton" then
+                -- Create context menu using modern API
+                MenuUtil.CreateContextMenu(UIParent, function(owner, rootDescription)
+                    rootDescription:CreateTitle(row.title)
+                    rootDescription:CreateButton("Share Quest", function()
+                        -- Select the quest in the quest log first, then share it
+                        C_QuestLog.SetSelectedQuest(row.id)
+                        QuestLogPushQuest()
+                    end)
+                    rootDescription:CreateButton("Cancel", function() end)
+                end)
+            end
+        end)
         rowButton:SetScript("OnEnter", function()
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
@@ -741,6 +771,22 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Also trigger auto-sync on these events
         AutoSyncQuestTracking()
     end
+    -- Monitor for quest share acceptance
+    if event == "CHAT_MSG_SYSTEM" then
+        local message = ...
+        -- ERR_QUEST_PUSH_SUCCESS_S is "%s accepted your quest."
+        -- Create a pattern from the global string
+        local pattern = string.gsub(ERR_QUEST_PUSH_SUCCESS_S, "%%s", "(.+)")
+        local characterName = string.match(message, pattern)
+        
+        if characterName then
+            -- Wait 1 second then refresh auto-sync to pick up the newly shared quest
+            C_Timer.After(1, function()
+                AutoSyncQuestTracking()
+                RefreshQuestWindowIfVisible()
+            end)
+        end
+    end
 end)
 
 -- Register quest-related events for auto refresh
@@ -749,3 +795,4 @@ frame:RegisterEvent("QUEST_REMOVED")
 frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
+frame:RegisterEvent("CHAT_MSG_SYSTEM")

@@ -23,6 +23,7 @@
         "Settings",
         "UIDropDownMenu_AddButton",
         "SlashCmdList",
-        "UIDropDownMenu_CreateInfo"
+        "UIDropDownMenu_CreateInfo",
+        "ERR_QUEST_PUSH_SUCCESS_S"
     ]
 }
