@@ -81,8 +81,43 @@ local function SerializeSnapshot(snapshot)
     return table.concat(parts, "|")
 end
 
+local function SerializeDelta(oldSnapshot, newSnapshot)
+    -- Format: DELTA|version|qid,tracked,ready;qid,tracked,ready;...
+    -- Only includes changed or new quests, and removed quests (marked as qid,-1,-1)
+    local parts = {"DELTA", ADDON_VERSION}
+    local entries = {}
+    
+    -- Find changed or new quests
+    for qid, newData in pairs(newSnapshot) do
+        local oldData = oldSnapshot and oldSnapshot[qid]
+        if not oldData or oldData.tracked ~= newData.tracked or oldData.ready ~= newData.ready then
+            table.insert(entries, string.format("%d,%d,%d", qid, newData.tracked and 1 or 0, newData.ready and 1 or 0))
+        end
+    end
+    
+    -- Find removed quests
+    if oldSnapshot then
+        for qid, _ in pairs(oldSnapshot) do
+            if not newSnapshot[qid] then
+                table.insert(entries, string.format("%d,-1,-1", qid))
+            end
+        end
+    end
+    
+    -- If no changes, return nil (will fall back to full snapshot)
+    if #entries == 0 then
+        return nil
+    end
+    
+    table.insert(parts, table.concat(entries, ";"))
+    return table.concat(parts, "|")
+end
+
 -- Track last sent snapshot to avoid redundant broadcasts
 local lastSentSnapshot = nil
+
+-- Throttling mechanism (step 1: 2.5 second debounce)
+local pendingSnapshotTimer = nil
 
 local function SnapshotsEqual(snap1, snap2)
     if not snap1 or not snap2 then return false end
@@ -101,39 +136,72 @@ local function SnapshotsEqual(snap1, snap2)
     return true
 end
 
-local function SendSnapshot()
+local function SendSnapshotImmediate(forceFull)
     if not IsInGroup() then return end
     EnsurePrefix()
     local snapshot = BuildLocalSnapshot()
     
     -- Skip sending if snapshot hasn't changed (step 4: state comparison)
-    if SnapshotsEqual(snapshot, lastSentSnapshot) then
+    if not forceFull and SnapshotsEqual(snapshot, lastSentSnapshot) then
         return
     end
     
-    lastSentSnapshot = snapshot
-    local msg = SerializeSnapshot(snapshot)
-    if #msg > 240 then
-        -- Fallback: send in chunks if very large (edge case) - simple split by ';'
-        local header = "SNAP_PART|"..ADDON_VERSION
-        local current = {}
-        local length = #header
-        for qid,data in pairs(snapshot) do
-            local seg = string.format("%d,%d,%d;", qid, data.tracked and 1 or 0, data.ready and 1 or 0)
-            if length + #seg > 240 then
-                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
-                current = {}
-                length = #header
-            end
-            table.insert(current, seg)
-            length = length + #seg
-        end
-        if #current > 0 then
-            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
-        end
-    else
-        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
+    -- Try delta encoding first (step 3), unless forcing full snapshot
+    local msg = nil
+    if not forceFull and lastSentSnapshot then
+        msg = SerializeDelta(lastSentSnapshot, snapshot)
     end
+    
+    -- Fall back to full snapshot if delta is nil or too large
+    if not msg or #msg > 240 then
+        msg = SerializeSnapshot(snapshot)
+        if #msg > 240 then
+            -- Fallback: send in chunks if very large (edge case) - simple split by ';'
+            local header = "SNAP_PART|"..ADDON_VERSION
+            local current = {}
+            local length = #header
+            for qid,data in pairs(snapshot) do
+                local seg = string.format("%d,%d,%d;", qid, data.tracked and 1 or 0, data.ready and 1 or 0)
+                if length + #seg > 240 then
+                    C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+                    current = {}
+                    length = #header
+                end
+                table.insert(current, seg)
+                length = length + #seg
+            end
+            if #current > 0 then
+                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, header.."|"..table.concat(current, ""), "PARTY")
+            end
+            lastSentSnapshot = snapshot
+            return
+        end
+    end
+    
+    lastSentSnapshot = snapshot
+    C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
+end
+
+local function SendSnapshot(immediate)
+    -- Step 1: Throttle with 2.5 second debounce (unless immediate is true)
+    if immediate then
+        if pendingSnapshotTimer then
+            pendingSnapshotTimer:Cancel()
+            pendingSnapshotTimer = nil
+        end
+        SendSnapshotImmediate(false)
+        return
+    end
+    
+    -- Cancel pending timer and schedule new one
+    if pendingSnapshotTimer then
+        pendingSnapshotTimer:Cancel()
+    end
+    
+    pendingSnapshotTimer = C_Timer.NewTimer(2.5, function()
+        pendingSnapshotTimer = nil
+        SendSnapshotImmediate(false)
+    end)
 end
 
 local function ApplySnapshot(fromPlayer, snapshotStr)
@@ -173,6 +241,42 @@ local function ApplySnapshot(fromPlayer, snapshotStr)
         end
     end
  end
+
+local function ApplyDelta(fromPlayer, deltaStr)
+    partyQuestStates[fromPlayer] = partyQuestStates[fromPlayer] or {}
+    -- Apply delta changes to existing state
+    for seg in deltaStr:gmatch("[^;]+") do
+        local qid, tracked, ready = seg:match("^(%d+),(-?%d),(-?%d)$")
+        if qid then
+            qid = tonumber(qid)
+            tracked = tonumber(tracked)
+            ready = tonumber(ready)
+            
+            if tracked == -1 and ready == -1 then
+                -- Quest removed
+                partyQuestStates[fromPlayer][qid] = nil
+            else
+                -- Quest added or updated
+                partyQuestStates[fromPlayer][qid] = partyQuestStates[fromPlayer][qid] or {}
+                local entry = partyQuestStates[fromPlayer][qid]
+                entry.has = true
+                entry.tracked = tracked == 1
+                entry.ready = ready == 1
+                -- Title will be filled from our quest log if we have the quest
+                local qi = C_QuestLog.GetQuestIDForLogIndex and C_QuestLog.GetLogIndexForQuestID and C_QuestLog.GetLogIndexForQuestID(qid)
+                if qi then
+                    local questInfo = C_QuestLog.GetInfo(qi)
+                    if questInfo and questInfo.title then
+                        entry.title = questInfo.title
+                    end
+                end
+                if not entry.title then
+                    entry.title = ("(Quest " .. qid .. ")")
+                end
+            end
+        end
+    end
+end
 
 -- Generic helper to make a frame draggable
 local function MakeDraggable(frame, key)
@@ -313,6 +417,14 @@ local function SendTrackCommand(questID, shouldTrack)
     -- Format: TRACK|version|questID|1/0
     local action = shouldTrack and "1" or "0"
     local msg = string.format("TRACK|%s|%d|%s", ADDON_VERSION, questID, action)
+    C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
+end
+
+local function SendSyncRequest()
+    if not IsInGroup() then return end
+    EnsurePrefix()
+    -- Format: SYNC_REQUEST|version
+    local msg = string.format("SYNC_REQUEST|%s", ADDON_VERSION)
     C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg, "PARTY")
 end
 
@@ -910,9 +1022,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Set up periodic full-sync fallback (step 6: 60-second timer)
         C_Timer.NewTicker(60, function()
             if IsInGroup() then
-                -- Force sync by clearing last snapshot cache
-                lastSentSnapshot = nil
-                SendSnapshot()
+                -- Force full sync (bypass throttle and delta)
+                SendSnapshotImmediate(true)
             end
         end)
         
@@ -953,6 +1064,11 @@ frame:SetScript("OnEvent", function(self, event, ...)
         if printButton then
             printButton:SetScript("OnClick", function(self, button)
                 PrintQuestIDs()
+                -- Trigger full re-sync: send our snapshot and request from party
+                if IsInGroup() then
+                    SendSnapshotImmediate(true)
+                    SendSyncRequest()
+                end
             end)
             printButton:ClearAllPoints()
             if QuestCoopDB.printButtonPos then
@@ -967,12 +1083,16 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end
     end
     -- Auto-refresh triggers
-    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" then
+    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" then
         RefreshQuestWindowIfVisible()
-        SendSnapshot()
+        SendSnapshot(true) -- Immediate for high-priority events
+    end
+    if event == "QUEST_WATCH_LIST_CHANGED" then
+        RefreshQuestWindowIfVisible()
+        SendSnapshot(false) -- Throttled for tracker changes
     end
     if event == "GROUP_ROSTER_UPDATE" then
-        SendSnapshot() -- share current state when group changes
+        SendSnapshot(true) -- Immediate when group changes
     end
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
@@ -984,6 +1104,9 @@ frame:SetScript("OnEvent", function(self, event, ...)
             elseif msgType == "SNAP_PART" and payload then
                 ApplySnapshot(sender, payload) -- partial sequences accumulate
                 RefreshQuestWindowIfVisible()
+            elseif msgType == "DELTA" and payload then
+                ApplyDelta(sender, payload)
+                RefreshQuestWindowIfVisible()
             elseif msgType == "TRACK" then
                 -- Format: TRACK|version|questID|1/0
                 local questID = tonumber(payload)
@@ -992,6 +1115,9 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     local shouldTrack = action == "1"
                     HandleTrackCommand(questID, shouldTrack)
                 end
+            elseif msgType == "SYNC_REQUEST" then
+                -- Someone requested a sync, send our full snapshot immediately
+                SendSnapshotImmediate(true)
             end
         end
     end
