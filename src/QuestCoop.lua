@@ -81,10 +81,37 @@ local function SerializeSnapshot(snapshot)
     return table.concat(parts, "|")
 end
 
+-- Track last sent snapshot to avoid redundant broadcasts
+local lastSentSnapshot = nil
+
+local function SnapshotsEqual(snap1, snap2)
+    if not snap1 or not snap2 then return false end
+    -- Check if quest IDs match
+    for qid, data1 in pairs(snap1) do
+        local data2 = snap2[qid]
+        if not data2 or data1.tracked ~= data2.tracked or data1.ready ~= data2.ready then
+            return false
+        end
+    end
+    for qid, _ in pairs(snap2) do
+        if not snap1[qid] then
+            return false
+        end
+    end
+    return true
+end
+
 local function SendSnapshot()
     if not IsInGroup() then return end
     EnsurePrefix()
     local snapshot = BuildLocalSnapshot()
+    
+    -- Skip sending if snapshot hasn't changed (step 4: state comparison)
+    if SnapshotsEqual(snapshot, lastSentSnapshot) then
+        return
+    end
+    
+    lastSentSnapshot = snapshot
     local msg = SerializeSnapshot(snapshot)
     if #msg > 240 then
         -- Fallback: send in chunks if very large (edge case) - simple split by ';'
@@ -311,9 +338,9 @@ local function HandleTrackCommand(questID, shouldTrack)
             end
         end
     end
-    -- Refresh the window and send updated snapshot
+    -- Refresh the window (snapshot will be sent by next event or periodic sync)
     RefreshQuestWindowIfVisible()
-    SendSnapshot()
+    -- SendSnapshot removed - reduces duplicate messages (step 5)
 end
 
 -- Function to print current quest IDs
@@ -646,7 +673,7 @@ function PrintQuestIDs(silentRefresh)
             SendTrackCommand(questID, isChecked)
             -- Refresh the window to reflect changes
             RefreshQuestWindowIfVisible()
-            SendSnapshot()
+            -- SendSnapshot removed - TRACK command already updates party state (step 5)
         end)
         table.insert(questScrollChild.lines, trackedCB)
 
@@ -803,7 +830,7 @@ function PrintQuestIDs(silentRefresh)
             end
             -- Refresh the window to reflect changes
             RefreshQuestWindowIfVisible()
-            SendSnapshot()
+            -- SendSnapshot removed - local tracking change will be sent on next event (step 5)
         end)
         table.insert(questScrollChild.lines, trackedCB)
 
@@ -880,6 +907,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         EnsurePrefix()
         
+        -- Set up periodic full-sync fallback (step 6: 60-second timer)
+        C_Timer.NewTicker(60, function()
+            if IsInGroup() then
+                -- Force sync by clearing last snapshot cache
+                lastSentSnapshot = nil
+                SendSnapshot()
+            end
+        end)
+        
         -- Initialize settings
         if not QuestCoopDB then QuestCoopDB = {} end
         if not QuestCoopDB.settings then
@@ -931,7 +967,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
         end
     end
     -- Auto-refresh triggers
-    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
+    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" then
         RefreshQuestWindowIfVisible()
         SendSnapshot()
     end
@@ -965,6 +1001,6 @@ end)
 frame:RegisterEvent("QUEST_ACCEPTED")
 frame:RegisterEvent("QUEST_REMOVED")
 frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
-frame:RegisterEvent("QUEST_LOG_UPDATE")
+-- QUEST_LOG_UPDATE removed - fires too frequently causing network congestion
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_ADDON")
