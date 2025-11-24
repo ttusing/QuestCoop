@@ -135,7 +135,7 @@ local questWindow, questScrollFrame, questScrollChild
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
-    questWindow:SetSize(560, 300) -- widened to accommodate extra columns
+    questWindow:SetSize(400, 300) -- adjusted width for ID and Title columns only
     questWindow:SetPoint("CENTER")
     questWindow:SetMovable(true)
     questWindow:EnableMouse(true)
@@ -158,7 +158,7 @@ local function CreateQuestWindow()
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
-    questScrollChild:SetSize(520, 1) -- widened for additional columns
+    questScrollChild:SetSize(360, 1) -- adjusted for narrower window
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
 end
@@ -421,9 +421,6 @@ function PrintQuestIDs(silentRefresh)
     -- Column layout constants
     local COL_ID_X = 10
     local COL_TITLE_X = 70
-    local COL_TRACKED_X = 280
-    local COL_INLOG_X = 340
-    local COL_READY_X = 400
     
     -- Adjust row height and spacing based on text size
     local textSize = GetSetting("textSize")
@@ -459,24 +456,6 @@ function PrintQuestIDs(silentRefresh)
     headerTitle:SetJustifyH("LEFT")
     headerTitle:SetText("Title")
     table.insert(questScrollChild.lines, headerTitle)
-
-    local headerTracked = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
-    headerTracked:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
-    headerTracked:SetJustifyH("LEFT")
-    headerTracked:SetText("Trk")
-    table.insert(questScrollChild.lines, headerTracked)
-
-    local headerInLog = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
-    headerInLog:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
-    headerInLog:SetJustifyH("LEFT")
-    headerInLog:SetText("Log")
-    table.insert(questScrollChild.lines, headerInLog)
-
-    local headerReady = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
-    headerReady:SetPoint("TOPLEFT", COL_READY_X, yOff)
-    headerReady:SetJustifyH("LEFT")
-    headerReady:SetText("Ready")
-    table.insert(questScrollChild.lines, headerReady)
     
     yOff = yOff - ROW_HEIGHT - 4
     
@@ -530,66 +509,14 @@ function PrintQuestIDs(silentRefresh)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
         titleFS:SetTextColor(1, 1, 1) -- White text
-        -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
-        local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
-        local displayTitle = row.title
-        titleFS:SetText(displayTitle)
-        if titleFS:GetStringWidth() > maxPixelWidth then
-            -- iterative truncate; naive but safe for small number of rows
-            local len = displayTitle:len()
-            while len > 3 and titleFS:GetStringWidth() > maxPixelWidth do
-                len = len - 1
-                displayTitle = displayTitle:sub(1, len) .. "…"
-                titleFS:SetText(displayTitle)
-            end
-        end
+        titleFS:SetText(row.title)
         titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
-
-        -- Tracked cell (checkbox) - enabled for shared section to track for all
-        local trackedCB = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
-        trackedCB:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
-        trackedCB:SetSize(20, 20)
-        trackedCB:SetChecked(row.tracked == "Yes")
-        trackedCB.questID = row.id
-        trackedCB:SetScript("OnClick", function(self)
-            local questID = self.questID
-            local isChecked = self:GetChecked()
-            -- First, update local player's tracking
-            if isChecked then
-                -- Add quest to tracker
-                if C_QuestLog.AddQuestWatch then
-                    C_QuestLog.AddQuestWatch(questID)
-                end
-            else
-                -- Remove quest from tracker
-                if C_QuestLog.RemoveQuestWatch then
-                    C_QuestLog.RemoveQuestWatch(questID)
-                end
-            end
-            -- Refresh the window to reflect changes
-            RefreshQuestWindowIfVisible()
-        end)
-        table.insert(questScrollChild.lines, trackedCB)
-
-        -- In Log cell
-        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
-        inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
-        inlogFS:SetJustifyH("LEFT")
-        inlogFS:SetText("All")
-        table.insert(questScrollChild.lines, inlogFS)
-
-        -- Ready cell
-        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
-        readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
-        readyFS:SetJustifyH("LEFT")
-        readyFS:SetText(row.ready)
-        table.insert(questScrollChild.lines, readyFS)
 
         -- Mouseover tooltip
         local rowButton = CreateFrame("Button", nil, questScrollChild)
         rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
-        rowButton:SetPoint("BOTTOMRIGHT", readyFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
         rowButton:SetScript("OnEnter", function()
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
@@ -677,65 +604,14 @@ function PrintQuestIDs(silentRefresh)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
         titleFS:SetTextColor(1, 1, 1) -- White text
-        -- Truncate title to fit within available width (rough width: COL_TRACKED_X - COL_TITLE_X - padding)
-        local maxPixelWidth = (COL_TRACKED_X - COL_TITLE_X) - 8
-        local displayTitle = row.title
-        titleFS:SetText(displayTitle)
-        if titleFS:GetStringWidth() > maxPixelWidth then
-            -- iterative truncate; naive but safe for small number of rows
-            local len = displayTitle:len()
-            while len > 3 and titleFS:GetStringWidth() > maxPixelWidth do
-                len = len - 1
-                displayTitle = displayTitle:sub(1, len) .. "…"
-                titleFS:SetText(displayTitle)
-            end
-        end
+        titleFS:SetText(row.title)
         titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
-
-        -- Tracked cell (checkbox)
-        local trackedCB = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
-        trackedCB:SetPoint("TOPLEFT", COL_TRACKED_X, yOff)
-        trackedCB:SetSize(20, 20)
-        trackedCB:SetChecked(row.tracked == "Yes")
-        trackedCB.questID = row.id
-        trackedCB:SetScript("OnClick", function(self)
-            local questID = self.questID
-            local isChecked = self:GetChecked()
-            if isChecked then
-                -- Add quest to tracker
-                if C_QuestLog.AddQuestWatch then
-                    C_QuestLog.AddQuestWatch(questID)
-                end
-            else
-                -- Remove quest from tracker
-                if C_QuestLog.RemoveQuestWatch then
-                    C_QuestLog.RemoveQuestWatch(questID)
-                end
-            end
-            -- Refresh the window to reflect changes
-            RefreshQuestWindowIfVisible()
-        end)
-        table.insert(questScrollChild.lines, trackedCB)
-
-        -- In Log cell (always Yes because we enumerate quest log)
-        local inlogFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
-        inlogFS:SetPoint("TOPLEFT", COL_INLOG_X, yOff)
-        inlogFS:SetJustifyH("LEFT")
-        inlogFS:SetText(row.inlog)
-        table.insert(questScrollChild.lines, inlogFS)
-
-        -- Ready cell (quest complete -> can turn in)
-        local readyFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
-        readyFS:SetPoint("TOPLEFT", COL_READY_X, yOff)
-        readyFS:SetJustifyH("LEFT")
-        readyFS:SetText(row.ready)
-        table.insert(questScrollChild.lines, readyFS)
 
         -- Mouseover tooltip region (use an invisible button spanning the row for simplicity)
         local rowButton = CreateFrame("Button", nil, questScrollChild)
         rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
-        rowButton:SetPoint("BOTTOMRIGHT", readyFS, "BOTTOMRIGHT", 2, -2)
+        rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
         rowButton:SetScript("OnEnter", function()
             GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
             GameTooltip:AddLine(row.fullTitle or row.title, 1,1,1, true)
