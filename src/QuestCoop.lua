@@ -49,6 +49,64 @@ local function GetPartyMemberQuestData(unit, questID)
     return {has = true}
 end
 
+-- Auto-sync quest tracking based on party members
+local function AutoSyncQuestTracking()
+    if not IsInGroup() then return end
+    
+    local numEntries = C_QuestLog.GetNumQuestLogEntries()
+    local playerName = UnitName("player")
+    
+    -- Build list of all party members including self
+    local allPartyMembers = {playerName}
+    for i = 1, GetNumGroupMembers() do
+        local unit = (IsInRaid() and "raid" or "party") .. i
+        local memberName = UnitName(unit)
+        if memberName and ShortName(memberName) ~= ShortName(playerName) then
+            table.insert(allPartyMembers, unit)
+        end
+    end
+    
+    local partySize = #allPartyMembers
+    if partySize <= 1 then return end -- No one to sync with
+    
+    -- Check each quest in our log
+    for i = 1, numEntries do
+        local questInfo = C_QuestLog.GetInfo(i)
+        if questInfo and not questInfo.isHeader then
+            local questID = questInfo.questID
+            if questID then
+                -- Check if ALL party members have this quest
+                local sharedByAll = true
+                for j = 2, partySize do -- Skip index 1 (ourselves)
+                    local unit = allPartyMembers[j]
+                    local questData = GetPartyMemberQuestData(unit, questID)
+                    if not questData or not questData.has then
+                        sharedByAll = false
+                        break
+                    end
+                end
+                
+                -- Check current tracking state
+                local isTracked = false
+                if C_QuestLog.GetQuestWatchType then
+                    isTracked = C_QuestLog.GetQuestWatchType(questID) ~= nil
+                end
+                
+                -- Track if shared by all, untrack if not
+                if sharedByAll and not isTracked then
+                    if C_QuestLog.AddQuestWatch then
+                        C_QuestLog.AddQuestWatch(questID)
+                    end
+                elseif not sharedByAll and isTracked then
+                    if C_QuestLog.RemoveQuestWatch then
+                        C_QuestLog.RemoveQuestWatch(questID)
+                    end
+                end
+            end
+        end
+    end
+end
+
 -- Generic helper to make a frame draggable
 local function MakeDraggable(frame, key)
     if not frame then return end
@@ -733,6 +791,19 @@ end
 -- Create frame to handle events
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
+
+-- Periodic timer for auto-syncing quest tracking
+local autoSyncTimer = 0
+local AUTO_SYNC_INTERVAL = 15 -- seconds
+
+frame:SetScript("OnUpdate", function(self, elapsed)
+    autoSyncTimer = autoSyncTimer + elapsed
+    if autoSyncTimer >= AUTO_SYNC_INTERVAL then
+        autoSyncTimer = 0
+        AutoSyncQuestTracking()
+    end
+end)
+
 frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
         -- Initialize settings
@@ -784,10 +855,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
             printButton:SetUserPlaced(true)
             printButton:Show()
         end
+        
+        -- Run initial auto-sync after login
+        C_Timer.After(2, AutoSyncQuestTracking)
     end
     -- Auto-refresh triggers
     if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" or event == "GROUP_ROSTER_UPDATE" then
         RefreshQuestWindowIfVisible()
+        -- Also trigger auto-sync on these events
+        AutoSyncQuestTracking()
     end
 end)
 
