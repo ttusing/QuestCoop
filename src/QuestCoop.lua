@@ -3,7 +3,30 @@ local addonName, addon = ...
 -- Default settings
 local DEFAULT_SETTINGS = {
     textSize = "medium", -- small, medium, large
+    recentLookbackMinutes = 10, -- How far back to look for "recent" quest activity
+    visibleSections = {
+        wrappingUp = true,
+        kickingOff = true,
+        sharedQuests = true,
+        myQuests = true,
+        partyQuests = true,
+    },
 }
+
+-- Network protocol constants
+local ADDON_PREFIX = "QuestCoop"
+local MESSAGE_COOLDOWN = 1.0 -- 1 second between messages
+local STALE_DATA_RETENTION = 300 -- 5 minutes (300 seconds)
+local DISPLAY_REFRESH_DEBOUNCE = 0.1 -- 100ms debounce for UI updates
+local QUEST_CACHE_EXPIRATION = 2592000 -- 30 days in seconds
+
+-- Runtime data structures
+local partyQuestStates = {} -- ["PlayerName-Realm"] = {activeQuestIDs, wrappingUp, kickingOff, lastUpdate, inParty}
+local incomingChunks = {} -- ["PlayerName-Realm"] = {[chunkIndex] = payload, totalChunks, receivedAt}
+local messageQueue = {} -- Array of {type, payload, chunk, total}
+local lastMessageSentTime = 0
+local pendingDisplayRefresh = false
+local lastDisplayRefreshTime = 0
 
 local function ShortName(name)
     if not name then return "?" end
@@ -35,6 +58,122 @@ local function GetFontSize()
     else -- medium
         return "GameFontHighlightSmall", "GameFontNormal", "GameFontNormalLarge"
     end
+end
+
+-- Quest name cache management
+local function GetQuestName(questID)
+    -- Check cache first
+    if QuestCoopDB.questCache and QuestCoopDB.questCache[questID] then
+        return QuestCoopDB.questCache[questID].name
+    end
+    
+    -- Try to get from API
+    local name = C_QuestLog.GetTitleForQuestID(questID)
+    if name then
+        -- Cache it
+        if not QuestCoopDB.questCache then QuestCoopDB.questCache = {} end
+        QuestCoopDB.questCache[questID] = {name = name, timestamp = time()}
+        return name
+    end
+    
+    -- Request load if not available
+    C_QuestLog.RequestLoadQuestByID(questID)
+    return "Quest " .. questID -- Placeholder until loaded
+end
+
+local function CleanupQuestCache()
+    if not QuestCoopDB.questCache then return end
+    local currentTime = time()
+    local removed = 0
+    for questID, data in pairs(QuestCoopDB.questCache) do
+        if currentTime - data.timestamp > QUEST_CACHE_EXPIRATION then
+            QuestCoopDB.questCache[questID] = nil
+            removed = removed + 1
+        end
+    end
+    if removed > 0 then
+        print("QuestCoop: Cleaned up " .. removed .. " expired quest cache entries")
+    end
+end
+
+-- Player identification helper
+local function GetFullPlayerName(unit)
+    local name, realm = UnitFullName(unit)
+    if not name then return nil end
+    if not realm or realm == "" then
+        realm = GetRealmName()
+    end
+    return name .. "-" .. realm
+end
+
+-- Message queue and throttling
+local function QueueMessage(msgType, payload, chunk, total)
+    table.insert(messageQueue, {
+        type = msgType,
+        payload = payload,
+        chunk = chunk,
+        total = total
+    })
+end
+
+local function SendQueuedMessages(elapsed)
+    if #messageQueue == 0 then return end
+    
+    local currentTime = time()
+    if currentTime - lastMessageSentTime >= MESSAGE_COOLDOWN then
+        local msg = table.remove(messageQueue, 1)
+        if msg then
+            -- Safety check: ensure payload is under 250 bytes
+            if #msg.payload <= 250 then
+                C_ChatInfo.SendAddonMessage(ADDON_PREFIX, msg.payload, "PARTY")
+                lastMessageSentTime = currentTime
+            else
+                print("QuestCoop: Warning - Message too large (" .. #msg.payload .. " bytes), skipped")
+            end
+        end
+    end
+end
+
+-- Broadcast quest log in chunks
+local function BroadcastQuestLog()
+    local questIDs = {}
+    local numEntries = C_QuestLog.GetNumQuestLogEntries()
+    
+    for i = 1, numEntries do
+        local questInfo = C_QuestLog.GetInfo(i)
+        if questInfo and not questInfo.isHeader then
+            local questID = questInfo.questID
+            if questID then
+                -- Skip hidden quests
+                local questTagInfo = C_QuestLog.GetQuestTagInfo and C_QuestLog.GetQuestTagInfo(questID)
+                if not (questTagInfo and questTagInfo.tagName and questTagInfo.tagName:lower() == "hidden quest") then
+                    table.insert(questIDs, questID)
+                end
+            end
+        end
+    end
+    
+    -- Split into chunks of 10 IDs
+    local chunkSize = 10
+    local totalChunks = math.ceil(#questIDs / chunkSize)
+    
+    for i = 1, totalChunks do
+        local startIdx = (i - 1) * chunkSize + 1
+        local endIdx = math.min(i * chunkSize, #questIDs)
+        local chunkIDs = {}
+        
+        for j = startIdx, endIdx do
+            table.insert(chunkIDs, tostring(questIDs[j]))
+        end
+        
+        local payload = string.format("QUEST_LOG:%d:%d:%s", i, totalChunks, table.concat(chunkIDs, ","))
+        QueueMessage("QUEST_LOG", payload, i, totalChunks)
+    end
+end
+
+-- UI refresh debouncing
+local function QueueDisplayRefresh()
+    pendingDisplayRefresh = true
 end
 
 -- Helper to get party member quest data using C_QuestLog.IsUnitOnQuest
@@ -220,6 +359,76 @@ local function CreateSettingsPanel()
             UIDropDownMenu_SetText(textSizeDropdown, option.text)
             break
         end
+    end
+    
+    -- Recent Activity Lookback Slider
+    local lookbackLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    lookbackLabel:SetPoint("TOPLEFT", textSizeDropdown, "BOTTOMLEFT", 15, -24)
+    lookbackLabel:SetText("Recent Activity Lookback (minutes):")
+    
+    local lookbackSlider = CreateFrame("Slider", "QuestCoopLookbackSlider", settingsPanel, "OptionsSliderTemplate")
+    lookbackSlider:SetPoint("TOPLEFT", lookbackLabel, "BOTTOMLEFT", 0, -16)
+    lookbackSlider:SetMinMaxValues(5, 120)
+    lookbackSlider:SetValueStep(5)
+    lookbackSlider:SetObeyStepOnDrag(true)
+    lookbackSlider:SetWidth(200)
+    _G[lookbackSlider:GetName() .. "Low"]:SetText("5")
+    _G[lookbackSlider:GetName() .. "High"]:SetText("120")
+    _G[lookbackSlider:GetName() .. "Text"]:SetText(GetSetting("recentLookbackMinutes") or 10)
+    lookbackSlider:SetValue(GetSetting("recentLookbackMinutes") or 10)
+    
+    lookbackSlider:SetScript("OnValueChanged", function(self, value)
+        value = math.floor(value + 0.5) -- Round to nearest integer
+        _G[self:GetName() .. "Text"]:SetText(value)
+        SetSetting("recentLookbackMinutes", value)
+        RefreshQuestWindowIfVisible()
+    end)
+    
+    local lookbackHelp = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    lookbackHelp:SetPoint("TOPLEFT", lookbackSlider, "BOTTOMLEFT", 0, -8)
+    lookbackHelp:SetText("How far back to look for 'Wrapping Up' and 'Kicking Off' quests")
+    lookbackHelp:SetTextColor(0.7, 0.7, 0.7)
+    
+    -- Display Sections Checkboxes
+    local sectionsLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    sectionsLabel:SetPoint("TOPLEFT", lookbackHelp, "BOTTOMLEFT", 0, -24)
+    sectionsLabel:SetText("Display Sections:")
+    
+    local checkboxYOffset = -24
+    local checkboxOptions = {
+        {key = "wrappingUp", label = "Wrapping Up (recently turned in by party)"},
+        {key = "kickingOff", label = "Kicking Off (recently accepted by party)"},
+        {key = "sharedQuests", label = "Shared Quests (quests all party members have)"},
+        {key = "myQuests", label = "My Unique Quests"},
+        {key = "partyQuests", label = "Party Unique Quests"},
+    }
+    
+    for i, option in ipairs(checkboxOptions) do
+        local checkbox = CreateFrame("CheckButton", "QuestCoopCheckbox" .. option.key, settingsPanel, "UICheckButtonTemplate")
+        checkbox:SetPoint("TOPLEFT", sectionsLabel, "BOTTOMLEFT", 0, checkboxYOffset)
+        _G[checkbox:GetName() .. "Text"]:SetText(option.label)
+        
+        -- Get current value
+        local visibleSections = GetSetting("visibleSections")
+        if not visibleSections then
+            visibleSections = DEFAULT_SETTINGS.visibleSections
+        end
+        checkbox:SetChecked(visibleSections[option.key] ~= false)
+        
+        checkbox:SetScript("OnClick", function(self)
+            local sections = GetSetting("visibleSections")
+            if not sections then
+                sections = {}
+                for k, v in pairs(DEFAULT_SETTINGS.visibleSections) do
+                    sections[k] = v
+                end
+            end
+            sections[option.key] = self:GetChecked()
+            SetSetting("visibleSections", sections)
+            RefreshQuestWindowIfVisible()
+        end)
+        
+        checkboxYOffset = checkboxYOffset - 28
     end
     
     -- Register with Interface Options
@@ -465,7 +674,15 @@ function PrintQuestIDs(silentRefresh)
         sharedQuestCount = sharedQuestCount + #quests
     end
     
-    if sharedQuestCount > 0 then
+    -- Check if sections are visible from settings (define here so it's available for all sections)
+    local showWrappingUp = GetSetting("visibleSections") and GetSetting("visibleSections").wrappingUp ~= false
+    local showKickingOff = GetSetting("visibleSections") and GetSetting("visibleSections").kickingOff ~= false
+    local showSharedQuests = GetSetting("visibleSections") and GetSetting("visibleSections").sharedQuests ~= false
+    local showMyQuests = GetSetting("visibleSections") and GetSetting("visibleSections").myQuests ~= false
+    local showPartyQuests = GetSetting("visibleSections") and GetSetting("visibleSections").partyQuests ~= false
+    local lookbackMinutes = GetSetting("recentLookbackMinutes") or 10
+    
+    if sharedQuestCount > 0 and showSharedQuests then
         -- Create shared section heading
         local sharedHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
         sharedHeading:SetPoint("TOPLEFT", 0, yOff)
@@ -559,6 +776,158 @@ function PrintQuestIDs(silentRefresh)
         yOff = yOff - 15
     end
     
+    -- Render "Wrapping Up" section (party members' recent turn-ins where local player still has the quest)
+    if showWrappingUp then
+        local wrappingUpQuests = {}
+        local currentTime = time()
+        local cutoffTime = currentTime - (lookbackMinutes * 60)
+        
+        for playerName, state in pairs(partyQuestStates) do
+            if playerName ~= GetFullPlayerName("player") then
+                for _, turnin in ipairs(state.wrappingUp) do
+                    if turnin.timestamp >= cutoffTime then
+                        -- Check if local player still has this quest
+                        if C_QuestLog.IsOnQuest(turnin.questID) then
+                            table.insert(wrappingUpQuests, {
+                                questID = turnin.questID,
+                                playerName = playerName,
+                                timestamp = turnin.timestamp
+                            })
+                        end
+                    end
+                end
+            end
+        end
+        
+        if #wrappingUpQuests > 0 then
+            -- Create section heading
+            local wrappingUpHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
+            wrappingUpHeading:SetPoint("TOPLEFT", 0, yOff)
+            wrappingUpHeading:SetJustifyH("LEFT")
+            wrappingUpHeading:SetTextColor(1, 0.6, 0) -- Orange for wrapping up
+            wrappingUpHeading:SetText(string.format("Wrapping Up (%d quests)", #wrappingUpQuests))
+            table.insert(questScrollChild.lines, wrappingUpHeading)
+            yOff = yOff - PLAYER_HEADING_HEIGHT
+            
+            -- Sort by timestamp (most recent first)
+            table.sort(wrappingUpQuests, function(a, b) return a.timestamp > b.timestamp end)
+            
+            for _, quest in ipairs(wrappingUpQuests) do
+                local questName = GetQuestName(quest.questID)
+                
+                -- ID cell
+                local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
+                idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
+                idFS:SetJustifyH("LEFT")
+                idFS:SetText(quest.questID)
+                table.insert(questScrollChild.lines, idFS)
+                
+                -- Title cell with player name
+                local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
+                titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
+                titleFS:SetJustifyH("LEFT")
+                titleFS:SetTextColor(1, 1, 1)
+                titleFS:SetText(questName .. " [" .. ShortName(quest.playerName) .. "]")
+                table.insert(questScrollChild.lines, titleFS)
+                
+                -- Tooltip
+                local rowButton = CreateFrame("Button", nil, questScrollChild)
+                rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
+                rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
+                rowButton:SetScript("OnEnter", function()
+                    GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
+                    GameTooltip:AddLine(questName, 1, 1, 1, true)
+                    GameTooltip:AddLine(string.format("Quest ID: %d", quest.questID), 0.9, 0.9, 0.9)
+                    local minutesAgo = math.floor((currentTime - quest.timestamp) / 60)
+                    GameTooltip:AddLine(ShortName(quest.playerName) .. " turned this in " .. minutesAgo .. " minutes ago", 1, 0.6, 0)
+                    GameTooltip:Show()
+                end)
+                rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                table.insert(questScrollChild.lines, rowButton)
+                
+                yOff = yOff - ROW_HEIGHT - 2
+            end
+            
+            yOff = yOff - 15
+        end
+    end
+    
+    -- Render "Kicking Off" section (party members' recent accepts where local player doesn't have the quest)
+    if showKickingOff then
+        local kickingOffQuests = {}
+        local currentTime = time()
+        local cutoffTime = currentTime - (lookbackMinutes * 60)
+        
+        for playerName, state in pairs(partyQuestStates) do
+            if playerName ~= GetFullPlayerName("player") then
+                for _, accept in ipairs(state.kickingOff) do
+                    if accept.timestamp >= cutoffTime then
+                        -- Check if local player does NOT have this quest
+                        if not C_QuestLog.IsOnQuest(accept.questID) then
+                            table.insert(kickingOffQuests, {
+                                questID = accept.questID,
+                                playerName = playerName,
+                                timestamp = accept.timestamp
+                            })
+                        end
+                    end
+                end
+            end
+        end
+        
+        if #kickingOffQuests > 0 then
+            -- Create section heading
+            local kickingOffHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
+            kickingOffHeading:SetPoint("TOPLEFT", 0, yOff)
+            kickingOffHeading:SetJustifyH("LEFT")
+            kickingOffHeading:SetTextColor(0, 0.8, 1) -- Cyan for kicking off
+            kickingOffHeading:SetText(string.format("Kicking Off (%d quests)", #kickingOffQuests))
+            table.insert(questScrollChild.lines, kickingOffHeading)
+            yOff = yOff - PLAYER_HEADING_HEIGHT
+            
+            -- Sort by timestamp (most recent first)
+            table.sort(kickingOffQuests, function(a, b) return a.timestamp > b.timestamp end)
+            
+            for _, quest in ipairs(kickingOffQuests) do
+                local questName = GetQuestName(quest.questID)
+                
+                -- ID cell
+                local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
+                idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
+                idFS:SetJustifyH("LEFT")
+                idFS:SetText(quest.questID)
+                table.insert(questScrollChild.lines, idFS)
+                
+                -- Title cell with player name
+                local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
+                titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
+                titleFS:SetJustifyH("LEFT")
+                titleFS:SetTextColor(1, 1, 1)
+                titleFS:SetText(questName .. " [" .. ShortName(quest.playerName) .. "]")
+                table.insert(questScrollChild.lines, titleFS)
+                
+                -- Tooltip
+                local rowButton = CreateFrame("Button", nil, questScrollChild)
+                rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
+                rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
+                rowButton:SetScript("OnEnter", function()
+                    GameTooltip:SetOwner(rowButton, "ANCHOR_CURSOR")
+                    GameTooltip:AddLine(questName, 1, 1, 1, true)
+                    GameTooltip:AddLine(string.format("Quest ID: %d", quest.questID), 0.9, 0.9, 0.9)
+                    local minutesAgo = math.floor((currentTime - quest.timestamp) / 60)
+                    GameTooltip:AddLine(ShortName(quest.playerName) .. " picked this up " .. minutesAgo .. " minutes ago", 0, 0.8, 1)
+                    GameTooltip:Show()
+                end)
+                rowButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+                table.insert(questScrollChild.lines, rowButton)
+                
+                yOff = yOff - ROW_HEIGHT - 2
+            end
+            
+            yOff = yOff - 15
+        end
+    end
+    
     -- Then render individual player quests (excluding shared)
     for _, playerDisplayName in ipairs(sortedPlayers) do
         local questsByTag = questsByPlayer[playerDisplayName]
@@ -571,6 +940,11 @@ function PrintQuestIDs(silentRefresh)
         
         -- Only display players with quests
         if totalQuests > 0 then
+            -- Check visibility settings
+            local isLocalPlayer = (playerDisplayName == UnitName("player"))
+            local shouldShow = (isLocalPlayer and showMyQuests) or (not isLocalPlayer and showPartyQuests)
+            
+            if shouldShow then
             -- Create player name heading
             local playerHeading = questScrollChild:CreateFontString(nil, "OVERLAY", fontLarge)
             playerHeading:SetPoint("TOPLEFT", 0, yOff)
@@ -686,6 +1060,7 @@ function PrintQuestIDs(silentRefresh)
             
             -- Add spacing after each player
             yOff = yOff - 10
+            end -- end if shouldShow
         end -- end if totalQuests > 0
     end -- end for players loop
 
@@ -708,7 +1083,99 @@ frame:SetScript("OnUpdate", function(self, elapsed)
         autoSyncTimer = 0
         AutoSyncQuestTracking()
     end
+    
+    -- Process message queue
+    SendQueuedMessages(elapsed)
+    
+    -- Handle debounced display refresh
+    if pendingDisplayRefresh and (time() - lastDisplayRefreshTime >= DISPLAY_REFRESH_DEBOUNCE) then
+        pendingDisplayRefresh = false
+        lastDisplayRefreshTime = time()
+        RefreshQuestWindowIfVisible()
+    end
 end)
+
+-- Handle incoming addon messages
+local function HandleAddonMessage(prefix, message, channel, sender)
+    if prefix ~= ADDON_PREFIX then return end
+    if channel ~= "PARTY" and channel ~= "RAID" then return end
+    
+    -- Parse message type
+    local msgType, rest = message:match("^([^:]+):(.*)$")
+    if not msgType then return end
+    
+    -- Initialize player state if needed
+    if not partyQuestStates[sender] then
+        partyQuestStates[sender] = {
+            activeQuestIDs = {},
+            wrappingUp = {},
+            kickingOff = {},
+            lastUpdate = time(),
+            inParty = true
+        }
+    end
+    
+    partyQuestStates[sender].lastUpdate = time()
+    partyQuestStates[sender].inParty = true
+    
+    if msgType == "QUEST_ACCEPT" then
+        local questID, timestamp = rest:match("^(%d+):(%d+)$")
+        if questID and timestamp then
+            questID = tonumber(questID)
+            timestamp = tonumber(timestamp)
+            table.insert(partyQuestStates[sender].kickingOff, {questID = questID, timestamp = timestamp})
+            partyQuestStates[sender].activeQuestIDs[questID] = true
+            QueueDisplayRefresh()
+        end
+        
+    elseif msgType == "QUEST_TURNIN" then
+        local questID, timestamp = rest:match("^(%d+):(%d+)$")
+        if questID and timestamp then
+            questID = tonumber(questID)
+            timestamp = tonumber(timestamp)
+            table.insert(partyQuestStates[sender].wrappingUp, {questID = questID, timestamp = timestamp})
+            partyQuestStates[sender].activeQuestIDs[questID] = nil
+            QueueDisplayRefresh()
+        end
+        
+    elseif msgType == "QUEST_LOG" then
+        local chunkIndex, totalChunks, questIDsStr = rest:match("^(%d+):(%d+):(.*)$")
+        if chunkIndex and totalChunks and questIDsStr then
+            chunkIndex = tonumber(chunkIndex)
+            totalChunks = tonumber(totalChunks)
+            
+            -- Initialize chunk buffer
+            if not incomingChunks[sender] then
+                incomingChunks[sender] = {totalChunks = totalChunks, receivedAt = time()}
+            end
+            
+            incomingChunks[sender][chunkIndex] = questIDsStr
+            
+            -- Check if we have all chunks
+            local complete = true
+            for i = 1, totalChunks do
+                if not incomingChunks[sender][i] then
+                    complete = false
+                    break
+                end
+            end
+            
+            if complete then
+                -- Reconstruct full quest list
+                local allQuestIDs = {}
+                for i = 1, totalChunks do
+                    for questID in string.gmatch(incomingChunks[sender][i], "(%d+)") do
+                        allQuestIDs[tonumber(questID)] = true
+                    end
+                end
+                
+                partyQuestStates[sender].activeQuestIDs = allQuestIDs
+                incomingChunks[sender] = nil -- Clear buffer
+                QueueDisplayRefresh()
+            end
+        end
+    end
+end
 
 frame:SetScript("OnEvent", function(self, event, ...)
     if event == "PLAYER_LOGIN" then
@@ -762,12 +1229,146 @@ frame:SetScript("OnEvent", function(self, event, ...)
             printButton:Show()
         end
         
+        -- Initialize quest cache
+        if not QuestCoopDB.questCache then
+            QuestCoopDB.questCache = {}
+        end
+        CleanupQuestCache()
+        
+        -- Register addon message prefix
+        C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
+        
         -- Run initial auto-sync after login
         C_Timer.After(2, AutoSyncQuestTracking)
     end
+    
+    -- Handle addon messages
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, message, channel, sender = ...
+        HandleAddonMessage(prefix, message, channel, sender)
+    end
+    
+    -- Handle quest data load results (for cache population)
+    if event == "QUEST_DATA_LOAD_RESULT" then
+        local questID, success = ...
+        if success then
+            local name = C_QuestLog.GetTitleForQuestID(questID)
+            if name then
+                if not QuestCoopDB.questCache then QuestCoopDB.questCache = {} end
+                QuestCoopDB.questCache[questID] = {name = name, timestamp = time()}
+            end
+        end
+    end
+    
+    -- Handle quest turn-ins
+    if event == "QUEST_TURNED_IN" then
+        local questID = ...
+        if questID then
+            local payload = string.format("QUEST_TURNIN:%d:%d", questID, time())
+            QueueMessage("QUEST_TURNIN", payload)
+            
+            -- Update local state
+            local playerName = GetFullPlayerName("player")
+            if playerName and partyQuestStates[playerName] then
+                table.insert(partyQuestStates[playerName].wrappingUp, {questID = questID, timestamp = time()})
+                partyQuestStates[playerName].activeQuestIDs[questID] = nil
+            end
+            
+            QueueDisplayRefresh()
+        end
+    end
+    
+    -- Handle quest accepts
+    if event == "QUEST_ACCEPTED" then
+        local questID = ...
+        if questID then
+            local payload = string.format("QUEST_ACCEPT:%d:%d", questID, time())
+            QueueMessage("QUEST_ACCEPT", payload)
+            
+            -- Update local state
+            local playerName = GetFullPlayerName("player")
+            if playerName and partyQuestStates[playerName] then
+                table.insert(partyQuestStates[playerName].kickingOff, {questID = questID, timestamp = time()})
+                partyQuestStates[playerName].activeQuestIDs[questID] = true
+            end
+            
+            QueueDisplayRefresh()
+        end
+    end
+    
+    -- Handle roster updates with player tracking
+    if event == "GROUP_ROSTER_UPDATE" then
+        local currentTime = time()
+        local currentMembers = {}
+        
+        -- Build list of current party members
+        if IsInGroup() then
+            for i = 1, GetNumGroupMembers() do
+                local unit = (IsInRaid() and "raid" or "party") .. i
+                local fullName = GetFullPlayerName(unit)
+                if fullName then
+                    currentMembers[fullName] = true
+                end
+            end
+        end
+        
+        -- Add self
+        local selfName = GetFullPlayerName("player")
+        if selfName then
+            currentMembers[selfName] = true
+            
+            -- Initialize self state if needed
+            if not partyQuestStates[selfName] then
+                partyQuestStates[selfName] = {
+                    activeQuestIDs = {},
+                    wrappingUp = {},
+                    kickingOff = {},
+                    lastUpdate = currentTime,
+                    inParty = true
+                }
+            end
+        end
+        
+        -- Update party states
+        for playerName, state in pairs(partyQuestStates) do
+            if currentMembers[playerName] then
+                state.inParty = true
+                state.lastUpdate = currentTime
+            else
+                if state.inParty then
+                    -- Player just left, mark as inactive
+                    state.inParty = false
+                end
+            end
+        end
+        
+        -- Cleanup stale entries
+        for playerName, state in pairs(partyQuestStates) do
+            if not state.inParty and (currentTime - state.lastUpdate > STALE_DATA_RETENTION) then
+                partyQuestStates[playerName] = nil
+            end
+        end
+        
+        -- Broadcast quest log with jitter (skip if we just synced recently)
+        if IsInGroup() and selfName then
+            local state = partyQuestStates[selfName]
+            if not state.lastBroadcast or (currentTime - state.lastBroadcast > 30) then
+                local jitter = math.random(0, 5000) / 1000
+                C_Timer.After(jitter, function()
+                    BroadcastQuestLog()
+                    if partyQuestStates[selfName] then
+                        partyQuestStates[selfName].lastBroadcast = time()
+                    end
+                end)
+            end
+        end
+        
+        QueueDisplayRefresh()
+    end
+    
     -- Auto-refresh triggers
-    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" or event == "GROUP_ROSTER_UPDATE" then
-        RefreshQuestWindowIfVisible()
+    if event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" then
+        QueueDisplayRefresh()
         -- Also trigger auto-sync on these events
         AutoSyncQuestTracking()
     end
@@ -796,3 +1397,6 @@ frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_SYSTEM")
+frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:RegisterEvent("QUEST_TURNED_IN")
+frame:RegisterEvent("QUEST_DATA_LOAD_RESULT")
