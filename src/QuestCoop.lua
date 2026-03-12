@@ -694,6 +694,95 @@ function PrintQuestIDs(silentRefresh)
     questWindow:Show()
 end
 
+-- Minimap button creation
+local minimapButton
+local function CreateMinimapButton()
+    if minimapButton then return end
+    
+    minimapButton = CreateFrame("Button", "QuestCoopMinimapButton", Minimap)
+    minimapButton:SetSize(32, 32)
+    minimapButton:SetFrameStrata("MEDIUM")
+    minimapButton:SetFrameLevel(8)
+    minimapButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+    minimapButton:SetHighlightTexture("Interface\\Minimap\\UI-Minimap-ZoomButton-Highlight")
+    
+    -- Icon texture
+    local icon = minimapButton:CreateTexture(nil, "BACKGROUND")
+    icon:SetSize(20, 20)
+    icon:SetPoint("CENTER", 0, 1)
+    icon:SetTexture("Interface\\Icons\\INV_Misc_Note_01") -- Quest scroll icon
+    minimapButton.icon = icon
+    
+    -- Border
+    local border = minimapButton:CreateTexture(nil, "OVERLAY")
+    border:SetSize(52, 52)
+    border:SetPoint("TOPLEFT")
+    border:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+    
+    -- Click handler
+    minimapButton:SetScript("OnClick", function(self, button)
+        if button == "LeftButton" then
+            PrintQuestIDs()
+        elseif button == "RightButton" then
+            if InterfaceOptionsFrame_OpenToCategory then
+                InterfaceOptionsFrame_OpenToCategory(settingsPanel)
+                InterfaceOptionsFrame_OpenToCategory(settingsPanel)
+            elseif Settings and Settings.OpenToCategory then
+                Settings.OpenToCategory(settingsPanel.name)
+            end
+        end
+    end)
+    
+    -- Tooltip
+    minimapButton:SetScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_LEFT")
+        GameTooltip:AddLine("Quest Co-op", 1, 1, 1)
+        GameTooltip:AddLine("Left-click: Show quest window", 0.5, 1, 0.5)
+        GameTooltip:AddLine("Right-click: Settings", 0.5, 1, 0.5)
+        GameTooltip:Show()
+    end)
+    
+    minimapButton:SetScript("OnLeave", function(self)
+        GameTooltip:Hide()
+    end)
+    
+    -- Dragging functionality
+    minimapButton:SetMovable(true)
+    minimapButton:EnableMouse(true)
+    minimapButton:RegisterForDrag("LeftButton")
+    
+    local function UpdatePosition()
+        local angle = QuestCoopDB.minimapAngle or 225
+        local x, y = math.cos(angle), math.sin(angle)
+        minimapButton:SetPoint("CENTER", Minimap, "CENTER", x * 100, y * 100)
+    end
+    
+    minimapButton:SetScript("OnDragStart", function(self)
+        self:LockHighlight()
+        self.isDragging = true
+    end)
+    
+    minimapButton:SetScript("OnDragStop", function(self)
+        self:UnlockHighlight()
+        self.isDragging = false
+    end)
+    
+    minimapButton:SetScript("OnUpdate", function(self)
+        if self.isDragging then
+            local mx, my = Minimap:GetCenter()
+            local px, py = GetCursorPosition()
+            local scale = Minimap:GetEffectiveScale()
+            px, py = px / scale, py / scale
+            
+            local angle = math.atan2(py - my, px - mx)
+            QuestCoopDB.minimapAngle = angle
+            UpdatePosition()
+        end
+    end)
+    
+    UpdatePosition()
+end
+
 -- Create frame to handle events
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("PLAYER_LOGIN")
@@ -726,6 +815,9 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Create settings panel
         CreateSettingsPanel()
         
+        -- Create minimap button
+        CreateMinimapButton()
+        
         -- Register slash command
         SLASH_QUESTCOOP1 = "/questcoop"
         SLASH_QUESTCOOP2 = "/qc"
@@ -741,25 +833,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
             else
                 PrintQuestIDs()
             end
-        end
-        
-        -- Set up click handler for the button defined in XML
-        local printButton = _G["PrintQuestIDsButton"]
-
-        if printButton then
-            printButton:SetScript("OnClick", function(self, button)
-                PrintQuestIDs()
-            end)
-            printButton:ClearAllPoints()
-            if QuestCoopDB.printButtonPos then
-                local pos = QuestCoopDB.printButtonPos
-                printButton:SetPoint(pos.point or "CENTER", UIParent, pos.relativePoint or "CENTER", pos.x or 0, pos.y or -40)
-            else
-                printButton:SetPoint("CENTER", UIParent, "CENTER", 0, -40)
-            end
-            MakeDraggable(printButton, "printButtonPos")
-            printButton:SetUserPlaced(true)
-            printButton:Show()
         end
         
         -- Run initial auto-sync after login

@@ -1,29 +1,3 @@
 <Ui xmlns="http://www.blizzard.com/wow/ui/">
-    <Frame name="QuestCoopFrame">
-        <Frames>
-            <!-- BackdropTemplate removed temporarily for debugging button creation -->
-            <Button name="PrintQuestIDsButton" inherits="UIPanelButtonTemplate">
-                <Size>
-                    <AbsDimension x="160" y="30"/>
-                </Size>
-                <Anchors>
-                    <Anchor point="CENTER">
-                        <Offset>
-                            <AbsDimension x="0" y="-40"/>
-                        </Offset>
-                    </Anchor>
-                </Anchors>
-                <Layers>
-                    <Layer level="ARTWORK">
-                        <FontString name="$parentText" inherits="GameFontNormal" setAllPoints="true" text="Quest Co-op"/>
-                    </Layer>
-                </Layers>
-                <Scripts>
-                    <OnClick>
-                        PrintQuestIDs()
-                    </OnClick>
-                </Scripts>
-            </Button>
-        </Frames>
-    </Frame>
+    <!-- Minimap button is now created in Lua -->
 </Ui>
