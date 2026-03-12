@@ -24,6 +24,8 @@
         "UIDropDownMenu_AddButton",
         "SlashCmdList",
         "UIDropDownMenu_CreateInfo",
-        "ERR_QUEST_PUSH_SUCCESS_S"
+        "ERR_QUEST_PUSH_SUCCESS_S",
+        "Minimap",
+        "MenuUtil"
     ]
 }

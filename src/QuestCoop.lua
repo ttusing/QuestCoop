@@ -754,7 +754,7 @@ local function CreateMinimapButton()
     local function UpdatePosition()
         local angle = QuestCoopDB.minimapAngle or 225
         local x, y = math.cos(angle), math.sin(angle)
-        minimapButton:SetPoint("CENTER", Minimap, "CENTER", x * 80, y * 80)
+        minimapButton:SetPoint("CENTER", Minimap, "CENTER", x * 100, y * 100)
     end
     
     minimapButton:SetScript("OnDragStart", function(self)
