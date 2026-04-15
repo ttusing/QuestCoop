@@ -3,6 +3,7 @@ local addonName, addon = ...
 -- Default settings
 local DEFAULT_SETTINGS = {
     textSize = "medium", -- small, medium, large
+    alwaysLeader = false,
 }
 
 local function ShortName(name)
@@ -35,6 +36,73 @@ local function GetFontSize()
     else -- medium
         return "GameFontHighlightSmall", "GameFontNormal", "GameFontNormalLarge"
     end
+end
+
+-- Table to track which party members have "Always be QuestCoop Leader" enabled.
+-- Populated via addon messages; keyed by short character name.
+local leaderPrefs = {}
+
+-- Broadcast our "always leader" preference to the party.
+local function BroadcastLeaderPref()
+    if not IsInGroup() then return end
+    local val = GetSetting("alwaysLeader") and "1" or "0"
+    C_ChatInfo.SendAddonMessage("QuestCoop", "LEADER_PREF|" .. val, "PARTY")
+end
+
+-- Remove leaderPrefs entries for players no longer in the party.
+local function CleanupLeaderPrefs()
+    local currentMembers = {}
+    currentMembers[ShortName(UnitName("player"))] = true
+    for i = 1, GetNumGroupMembers() do
+        local unit = (IsInRaid() and "raid" or "party") .. i
+        local name = UnitName(unit)
+        if name then
+            currentMembers[ShortName(name)] = true
+        end
+    end
+    for name in pairs(leaderPrefs) do
+        if not currentMembers[name] then
+            leaderPrefs[name] = nil
+        end
+    end
+end
+
+-- Returns the short name of the current WoW party leader (or the player if solo).
+local function GetWoWPartyLeaderName()
+    local units = {"player"}
+    for i = 1, GetNumGroupMembers() do
+        table.insert(units, (IsInRaid() and "raid" or "party") .. i)
+    end
+    for _, unit in ipairs(units) do
+        if UnitIsGroupLeader(unit) then
+            return ShortName(UnitName(unit))
+        end
+    end
+    return ShortName(UnitName("player"))
+end
+
+-- Returns the short name of the QuestCoop leader.
+-- If any party member has "Always be QuestCoop Leader" checked, the
+-- alphabetically earliest name among them wins. Otherwise falls back
+-- to the WoW party leader.
+local function GetQuestCoopLeader()
+    -- Always seed our own current preference so it's up to date.
+    local selfName = ShortName(UnitName("player"))
+    leaderPrefs[selfName] = GetSetting("alwaysLeader")
+
+    local candidates = {}
+    for name, wantsLeader in pairs(leaderPrefs) do
+        if wantsLeader then
+            table.insert(candidates, name)
+        end
+    end
+
+    if #candidates == 0 then
+        return GetWoWPartyLeaderName()
+    end
+
+    table.sort(candidates)
+    return candidates[1]
 end
 
 -- Helper to get party member quest data using C_QuestLog.IsUnitOnQuest
@@ -131,7 +199,7 @@ end
 local RefreshQuestWindowIfVisible
 
 -- Quest ID window (created lazily)
-local questWindow, questScrollFrame, questScrollChild
+local questWindow, questScrollFrame, questScrollChild, questLeaderLabel
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
@@ -150,11 +218,16 @@ local function CreateQuestWindow()
     title:SetPoint("TOP", 0, -10)
     title:SetText("Quest Co-op")
 
+    questLeaderLabel = questWindow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    questLeaderLabel:SetPoint("TOP", 0, -30)
+    questLeaderLabel:SetTextColor(1, 0.85, 0)
+    questLeaderLabel:SetText("QuestCoop Leader: ...")
+
     local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 0, 0)
 
     questScrollFrame = CreateFrame("ScrollFrame", "QuestCoopQuestScroll", questWindow, "UIPanelScrollFrameTemplate")
-    questScrollFrame:SetPoint("TOPLEFT", 16, -40)
+    questScrollFrame:SetPoint("TOPLEFT", 16, -58)
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
@@ -221,7 +294,25 @@ local function CreateSettingsPanel()
             break
         end
     end
-    
+
+    -- Always Leader Section
+    local alwaysLeaderCheckbox = CreateFrame("CheckButton", "QuestCoopAlwaysLeaderCheckbox", settingsPanel, "UICheckButtonTemplate")
+    alwaysLeaderCheckbox:SetPoint("TOPLEFT", textSizeDropdown, "BOTTOMLEFT", 15, -16)
+    alwaysLeaderCheckbox:SetChecked(GetSetting("alwaysLeader"))
+    alwaysLeaderCheckbox:SetScript("OnClick", function(self)
+        SetSetting("alwaysLeader", self:GetChecked())
+        BroadcastLeaderPref()
+        RefreshQuestWindowIfVisible()
+    end)
+
+    local alwaysLeaderLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    alwaysLeaderLabel:SetPoint("LEFT", alwaysLeaderCheckbox, "RIGHT", 2, 0)
+    alwaysLeaderLabel:SetText("Always be QuestCoop Leader")
+
+    local alwaysLeaderDesc = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
+    alwaysLeaderDesc:SetPoint("TOPLEFT", alwaysLeaderCheckbox, "BOTTOMLEFT", 4, -4)
+    alwaysLeaderDesc:SetText("If multiple party members have this checked, the alphabetically earliest name leads. Overrides the WoW party leader.")
+
     -- Register with Interface Options
     if InterfaceOptions_AddCategory then
         InterfaceOptions_AddCategory(settingsPanel)
@@ -245,6 +336,9 @@ end
 -- When silentRefresh is true, we don't echo to chat even if shift is down.
 function PrintQuestIDs(silentRefresh)
     CreateQuestWindow()
+    if questLeaderLabel then
+        questLeaderLabel:SetText("QuestCoop Leader: " .. GetQuestCoopLeader())
+    end
     -- Build structured rows organized by player and tag
     -- questsByPlayer[playerName][tagName] = {quest1, quest2, ...}
     local questsByPlayer = {}
@@ -835,14 +929,24 @@ frame:SetScript("OnEvent", function(self, event, ...)
             end
         end
         
-        -- Run initial auto-sync after login
-        C_Timer.After(2, AutoSyncQuestTracking)
+        -- Register addon message prefix for leader sync
+        C_ChatInfo.RegisterAddonMessagePrefix("QuestCoop")
+
+        -- Run initial auto-sync and leader broadcast after login
+        C_Timer.After(2, function()
+            AutoSyncQuestTracking()
+            BroadcastLeaderPref()
+        end)
     end
     -- Auto-refresh triggers
     if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" or event == "GROUP_ROSTER_UPDATE" then
         RefreshQuestWindowIfVisible()
         -- Also trigger auto-sync on these events
         AutoSyncQuestTracking()
+    end
+    if event == "GROUP_ROSTER_UPDATE" then
+        CleanupLeaderPrefs()
+        C_Timer.After(1, BroadcastLeaderPref)
     end
     -- Monitor for quest share acceptance
     if event == "CHAT_MSG_SYSTEM" then
@@ -860,6 +964,16 @@ frame:SetScript("OnEvent", function(self, event, ...)
             end)
         end
     end
+    if event == "CHAT_MSG_ADDON" then
+        local prefix, message, channel, sender = ...
+        if prefix == "QuestCoop" then
+            local pref = message:match("^LEADER_PREF|(%d)$")
+            if pref then
+                leaderPrefs[ShortName(sender)] = (pref == "1")
+                RefreshQuestWindowIfVisible()
+            end
+        end
+    end
 end)
 
 -- Register quest-related events for auto refresh
@@ -869,3 +983,4 @@ frame:RegisterEvent("QUEST_WATCH_LIST_CHANGED")
 frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_SYSTEM")
+frame:RegisterEvent("CHAT_MSG_ADDON")
