@@ -14,12 +14,10 @@ jobs:
 
       - name: Package Addon
         run: |
-          mkdir -p release
-          zip -r release/QuestCoop.zip \
-            QuestCoop.toc \
-            src/ \
-            LICENSE \
-            README.md
+          mkdir -p release/QuestCoop
+          cp -r QuestCoop.toc src/ LICENSE README.md release/QuestCoop/
+          cd release
+          zip -r QuestCoop.zip QuestCoop/
 
       - name: Upload to CurseForge
         uses: itsmeow/curseforge-upload@v3
