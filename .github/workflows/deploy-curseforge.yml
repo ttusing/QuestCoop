@@ -24,7 +24,7 @@ jobs:
       - name: Upload to CurseForge
         uses: itsmeow/curseforge-upload@v3
         with:
-          token: ${{ secrets.CURSEFORGE_TOKEN }}
+          token: ${{ secrets.CURSEFORGE_SECRET }}
           project_id: "1386288"
           game_endpoint: wow
           file_path: release/QuestCoop.zip
