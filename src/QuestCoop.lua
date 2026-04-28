@@ -4,6 +4,7 @@ local addonName, addon = ...
 local DEFAULT_SETTINGS = {
     textSize = "medium", -- small, medium, large
     alwaysLeader = false,
+    windowScale = 1.0,
 }
 
 local function ShortName(name)
@@ -254,8 +255,9 @@ local function MakeDraggable(frame, key)
     end)
 end
 
--- Forward declaration for RefreshQuestWindowIfVisible (defined later)
+-- Forward declarations for functions defined later in the file
 local RefreshQuestWindowIfVisible
+local ToggleRecentlyCompletedWindow
 
 -- Quest ID window (created lazily)
 local questWindow, questScrollFrame, questScrollChild, questLeaderLabel
@@ -296,9 +298,11 @@ local function CreateQuestWindow()
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
-    questScrollChild:SetSize(360, 1) -- adjusted for narrower window
+    questScrollChild:SetSize(360, 1)
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
+
+    questWindow:SetScale(GetSetting("windowScale"))
 end
 
 -- Settings panel
@@ -377,6 +381,51 @@ local function CreateSettingsPanel()
     local alwaysLeaderDesc = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     alwaysLeaderDesc:SetPoint("TOPLEFT", alwaysLeaderCheckbox, "BOTTOMLEFT", 4, -4)
     alwaysLeaderDesc:SetText("If multiple party members have this checked, the alphabetically earliest name leads. Overrides the WoW party leader.")
+
+    -- Window Scale Section
+    local scaleLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    scaleLabel:SetPoint("TOPLEFT", alwaysLeaderDesc, "BOTTOMLEFT", -4, -24)
+    scaleLabel:SetText("Window Scale:")
+
+    local scaleOptions = {
+        {text = "75%",  value = 0.75},
+        {text = "85%",  value = 0.85},
+        {text = "100%", value = 1.0},
+        {text = "115%", value = 1.15},
+        {text = "125%", value = 1.25},
+        {text = "150%", value = 1.5},
+    }
+
+    local scaleDropdown = CreateFrame("Frame", "QuestCoopScaleDropdown", settingsPanel, "UIDropDownMenuTemplate")
+    scaleDropdown:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", -15, -8)
+
+    local function ScaleDropdown_OnClick(self)
+        SetSetting("windowScale", self.value)
+        UIDropDownMenu_SetText(scaleDropdown, self:GetText())
+        if questWindow then questWindow:SetScale(self.value) end
+    end
+
+    local function ScaleDropdown_Initialize(self, level)
+        local info = UIDropDownMenu_CreateInfo()
+        for _, option in ipairs(scaleOptions) do
+            info.text = option.text
+            info.value = option.value
+            info.func = ScaleDropdown_OnClick
+            info.checked = (GetSetting("windowScale") == option.value)
+            UIDropDownMenu_AddButton(info)
+        end
+    end
+
+    UIDropDownMenu_Initialize(scaleDropdown, ScaleDropdown_Initialize)
+    UIDropDownMenu_SetWidth(scaleDropdown, 120)
+
+    local currentScale = GetSetting("windowScale")
+    for _, option in ipairs(scaleOptions) do
+        if option.value == currentScale then
+            UIDropDownMenu_SetText(scaleDropdown, option.text)
+            break
+        end
+    end
 
     -- Register with Interface Options
     if InterfaceOptions_AddCategory then
