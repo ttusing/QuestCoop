@@ -4,7 +4,6 @@ local addonName, addon = ...
 local DEFAULT_SETTINGS = {
     textSize = "medium", -- small, medium, large
     alwaysLeader = false,
-    windowScale = 1.0,
 }
 
 local function ShortName(name)
@@ -264,9 +263,14 @@ local questWindow, questScrollFrame, questScrollChild, questLeaderLabel
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
-    questWindow:SetSize(400, 300) -- adjusted width for ID and Title columns only
+
+    local savedW = QuestCoopDB and QuestCoopDB.questWindowWidth or 400
+    local savedH = QuestCoopDB and QuestCoopDB.questWindowHeight or 300
+    questWindow:SetSize(savedW, savedH)
     questWindow:SetPoint("CENTER")
     questWindow:SetMovable(true)
+    questWindow:SetResizable(true)
+    questWindow:SetResizeBounds(280, 200)
     questWindow:EnableMouse(true)
     questWindow:RegisterForDrag("LeftButton")
     questWindow:SetScript("OnDragStart", function(self) self:StartMoving() end)
@@ -302,7 +306,21 @@ local function CreateQuestWindow()
     questScrollFrame:SetScrollChild(questScrollChild)
     questScrollChild.lines = {}
 
-    questWindow:SetScale(GetSetting("windowScale"))
+    -- Resize handle in the bottom-right corner
+    local resizeHandle = CreateFrame("Button", nil, questWindow)
+    resizeHandle:SetSize(16, 16)
+    resizeHandle:SetPoint("BOTTOMRIGHT", -4, 4)
+    resizeHandle:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    resizeHandle:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+    resizeHandle:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+    resizeHandle:SetScript("OnMouseDown", function() questWindow:StartSizing("BOTTOMRIGHT") end)
+    resizeHandle:SetScript("OnMouseUp", function()
+        questWindow:StopMovingOrSizing()
+        if not QuestCoopDB then QuestCoopDB = {} end
+        QuestCoopDB.questWindowWidth  = questWindow:GetWidth()
+        QuestCoopDB.questWindowHeight = questWindow:GetHeight()
+        RefreshQuestWindowIfVisible()
+    end)
 end
 
 -- Settings panel
@@ -381,51 +399,6 @@ local function CreateSettingsPanel()
     local alwaysLeaderDesc = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     alwaysLeaderDesc:SetPoint("TOPLEFT", alwaysLeaderCheckbox, "BOTTOMLEFT", 4, -4)
     alwaysLeaderDesc:SetText("If multiple party members have this checked, the alphabetically earliest name leads. Overrides the WoW party leader.")
-
-    -- Window Scale Section
-    local scaleLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
-    scaleLabel:SetPoint("TOPLEFT", alwaysLeaderDesc, "BOTTOMLEFT", -4, -24)
-    scaleLabel:SetText("Window Scale:")
-
-    local scaleOptions = {
-        {text = "75%",  value = 0.75},
-        {text = "85%",  value = 0.85},
-        {text = "100%", value = 1.0},
-        {text = "115%", value = 1.15},
-        {text = "125%", value = 1.25},
-        {text = "150%", value = 1.5},
-    }
-
-    local scaleDropdown = CreateFrame("Frame", "QuestCoopScaleDropdown", settingsPanel, "UIDropDownMenuTemplate")
-    scaleDropdown:SetPoint("TOPLEFT", scaleLabel, "BOTTOMLEFT", -15, -8)
-
-    local function ScaleDropdown_OnClick(self)
-        SetSetting("windowScale", self.value)
-        UIDropDownMenu_SetText(scaleDropdown, self:GetText())
-        if questWindow then questWindow:SetScale(self.value) end
-    end
-
-    local function ScaleDropdown_Initialize(self, level)
-        local info = UIDropDownMenu_CreateInfo()
-        for _, option in ipairs(scaleOptions) do
-            info.text = option.text
-            info.value = option.value
-            info.func = ScaleDropdown_OnClick
-            info.checked = (GetSetting("windowScale") == option.value)
-            UIDropDownMenu_AddButton(info)
-        end
-    end
-
-    UIDropDownMenu_Initialize(scaleDropdown, ScaleDropdown_Initialize)
-    UIDropDownMenu_SetWidth(scaleDropdown, 120)
-
-    local currentScale = GetSetting("windowScale")
-    for _, option in ipairs(scaleOptions) do
-        if option.value == currentScale then
-            UIDropDownMenu_SetText(scaleDropdown, option.text)
-            break
-        end
-    end
 
     -- Register with Interface Options
     if InterfaceOptions_AddCategory then
@@ -937,6 +910,7 @@ function PrintQuestIDs(silentRefresh)
 
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
+    questScrollChild:SetWidth(math.max(questScrollFrame:GetWidth(), 200))
     questWindow:Show()
 end
 
