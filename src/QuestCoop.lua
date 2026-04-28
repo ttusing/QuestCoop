@@ -42,6 +42,14 @@ end
 -- Populated via addon messages; keyed by short character name.
 local leaderPrefs = {}
 
+-- Untracked quests received from the QuestCoop leader (runtime only, not saved).
+local receivedUntrackedQuests = {}
+
+-- Recently completed quests shown in the recently completed window: {[questID] = {title, completedBy}}
+local recentlyCompletedQuests = {}
+-- Quests waiting for the 10-second grace period before appearing in the window.
+local pendingCompletedQuests = {}
+
 -- Broadcast our "always leader" preference to the party.
 local function BroadcastLeaderPref()
     if not IsInGroup() then return end
@@ -105,6 +113,52 @@ local function GetQuestCoopLeader()
     return candidates[1]
 end
 
+-- Returns the effective set of untracked quest IDs (leader's own or received from leader).
+local function GetEffectiveUntrackedQuests()
+    if not QuestCoopDB then QuestCoopDB = {} end
+    if not QuestCoopDB.untrackedQuests then QuestCoopDB.untrackedQuests = {} end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() == selfName then
+        return QuestCoopDB.untrackedQuests
+    else
+        return receivedUntrackedQuests
+    end
+end
+
+-- Broadcast the leader's untracked quest list to the party.
+local function BroadcastUntrackedQuests()
+    if not IsInGroup() then return end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() ~= selfName then return end
+    if not QuestCoopDB then QuestCoopDB = {} end
+    if not QuestCoopDB.untrackedQuests then QuestCoopDB.untrackedQuests = {} end
+    local ids = {}
+    for questID in pairs(QuestCoopDB.untrackedQuests) do
+        table.insert(ids, tostring(questID))
+    end
+    C_ChatInfo.SendAddonMessage("QuestCoop", "UNTRACKED_QUESTS|" .. table.concat(ids, ","), "PARTY")
+end
+
+-- Toggle the untracked state of a quest (leader only). Broadcasts change to party.
+local function SetQuestUntracked(questID, untracked)
+    if not QuestCoopDB then QuestCoopDB = {} end
+    if not QuestCoopDB.untrackedQuests then QuestCoopDB.untrackedQuests = {} end
+    if untracked then
+        QuestCoopDB.untrackedQuests[questID] = true
+        if C_QuestLog.RemoveQuestWatch then C_QuestLog.RemoveQuestWatch(questID) end
+    else
+        QuestCoopDB.untrackedQuests[questID] = nil
+    end
+    BroadcastUntrackedQuests()
+end
+
+-- Broadcast completion of a quest to party members.
+local function BroadcastQuestCompleted(questID)
+    if not IsInGroup() then return end
+    local title = (C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)) or ("Quest " .. questID)
+    C_ChatInfo.SendAddonMessage("QuestCoop", string.format("QUEST_COMPLETED|%d|%s", questID, title or ""), "PARTY")
+end
+
 -- Helper to get party member quest data using C_QuestLog.IsUnitOnQuest
 local function GetPartyMemberQuestData(unit, questID)
     if not C_QuestLog.IsUnitOnQuest then return nil end
@@ -160,8 +214,13 @@ local function AutoSyncQuestTracking()
                     isTracked = C_QuestLog.GetQuestWatchType(questID) ~= nil
                 end
                 
-                -- Track if shared by all, untrack if not
-                if sharedByAll and not isTracked then
+                -- Respect untracked list: if marked untracked, never auto-track it.
+                local untrackedSet = GetEffectiveUntrackedQuests()
+                if untrackedSet[questID] then
+                    if isTracked and C_QuestLog.RemoveQuestWatch then
+                        C_QuestLog.RemoveQuestWatch(questID)
+                    end
+                elseif sharedByAll and not isTracked then
                     if C_QuestLog.AddQuestWatch then
                         C_QuestLog.AddQuestWatch(questID)
                     end
@@ -226,8 +285,14 @@ local function CreateQuestWindow()
     local close = CreateFrame("Button", nil, questWindow, "UIPanelCloseButton")
     close:SetPoint("TOPRIGHT", 0, 0)
 
+    local rcBtn = CreateFrame("Button", nil, questWindow, "UIPanelButtonTemplate")
+    rcBtn:SetSize(170, 20)
+    rcBtn:SetPoint("TOP", questLeaderLabel, "BOTTOM", 0, -4)
+    rcBtn:SetText("Recently Completed")
+    rcBtn:SetScript("OnClick", function() ToggleRecentlyCompletedWindow() end)
+
     questScrollFrame = CreateFrame("ScrollFrame", "QuestCoopQuestScroll", questWindow, "UIPanelScrollFrameTemplate")
-    questScrollFrame:SetPoint("TOPLEFT", 16, -58)
+    questScrollFrame:SetPoint("TOPLEFT", 16, -82)
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
@@ -512,9 +577,15 @@ function PrintQuestIDs(silentRefresh)
     for _, fs in ipairs(questScrollChild.lines) do fs:Hide() end
     wipe(questScrollChild.lines)
 
-    -- Column layout constants
-    local COL_ID_X = 10
-    local COL_TITLE_X = 70
+    -- Column layout constants (checkbox | id | title)
+    local COL_CHECK_X = 2
+    local COL_ID_X = 22
+    local COL_TITLE_X = 82
+
+    -- Precompute leader/untracked state once per render pass
+    local selfName = ShortName(UnitName("player"))
+    local isLeader = (GetQuestCoopLeader() == selfName)
+    local untrackedSet = GetEffectiveUntrackedQuests()
     
     -- Adjust row height and spacing based on text size
     local textSize = GetSetting("textSize")
@@ -539,6 +610,13 @@ function PrintQuestIDs(silentRefresh)
     local fontSmall, fontNormal, fontLarge = GetFontSize()
     
     -- Header row with column labels
+    local headerCheck = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
+    headerCheck:SetPoint("TOPLEFT", COL_CHECK_X, yOff)
+    headerCheck:SetJustifyH("LEFT")
+    headerCheck:SetTextColor(0.7, 0.7, 0.7)
+    headerCheck:SetText("Skip")
+    table.insert(questScrollChild.lines, headerCheck)
+
     local headerID = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
     headerID:SetPoint("TOPLEFT", COL_ID_X, yOff)
     headerID:SetJustifyH("LEFT")
@@ -591,6 +669,21 @@ function PrintQuestIDs(silentRefresh)
             
             -- Render each shared quest under this tag
             for _, row in ipairs(questsInTag) do
+        -- Untrack checkbox
+        local cb = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
+        cb:SetSize(16, 16)
+        cb:SetPoint("TOPLEFT", COL_CHECK_X, yOff + 1)
+        cb:SetChecked(untrackedSet[row.id] == true)
+        if isLeader then
+            cb:SetScript("OnClick", function(self)
+                SetQuestUntracked(row.id, self:GetChecked())
+                RefreshQuestWindowIfVisible()
+            end)
+        else
+            cb:SetEnabled(false)
+        end
+        table.insert(questScrollChild.lines, cb)
+
         -- ID cell
         local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
@@ -602,7 +695,7 @@ function PrintQuestIDs(silentRefresh)
         local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
-        titleFS:SetTextColor(1, 1, 1) -- White text
+        titleFS:SetTextColor(1, 1, 1)
         titleFS:SetText(row.title)
         titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
@@ -614,11 +707,9 @@ function PrintQuestIDs(silentRefresh)
         rowButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         rowButton:SetScript("OnClick", function(self, button)
             if button == "RightButton" then
-                -- Create context menu using modern API
                 MenuUtil.CreateContextMenu(UIParent, function(owner, rootDescription)
                     rootDescription:CreateTitle(row.title)
                     rootDescription:CreateButton("Share Quest", function()
-                        -- Select the quest in the quest log first, then share it
                         C_QuestLog.SetSelectedQuest(row.id)
                         QuestLogPushQuest()
                     end)
@@ -701,6 +792,21 @@ function PrintQuestIDs(silentRefresh)
                 
                 -- Render each quest under this tag
                 for _, row in ipairs(questsInTag) do
+        -- Untrack checkbox
+        local cb = CreateFrame("CheckButton", nil, questScrollChild, "UICheckButtonTemplate")
+        cb:SetSize(16, 16)
+        cb:SetPoint("TOPLEFT", COL_CHECK_X, yOff + 1)
+        cb:SetChecked(untrackedSet[row.id] == true)
+        if isLeader then
+            cb:SetScript("OnClick", function(self)
+                SetQuestUntracked(row.id, self:GetChecked())
+                RefreshQuestWindowIfVisible()
+            end)
+        else
+            cb:SetEnabled(false)
+        end
+        table.insert(questScrollChild.lines, cb)
+
         -- ID cell
         local idFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontSmall)
         idFS:SetPoint("TOPLEFT", COL_ID_X, yOff)
@@ -712,23 +818,21 @@ function PrintQuestIDs(silentRefresh)
         local titleFS = questScrollChild:CreateFontString(nil, "OVERLAY", fontNormal)
         titleFS:SetPoint("TOPLEFT", COL_TITLE_X, yOff)
         titleFS:SetJustifyH("LEFT")
-        titleFS:SetTextColor(1, 1, 1) -- White text
+        titleFS:SetTextColor(1, 1, 1)
         titleFS:SetText(row.title)
         titleFS.fullTitle = row.title
         table.insert(questScrollChild.lines, titleFS)
 
-        -- Mouseover tooltip region (use an invisible button spanning the row for simplicity)
+        -- Mouseover tooltip region
         local rowButton = CreateFrame("Button", nil, questScrollChild)
         rowButton:SetPoint("TOPLEFT", idFS, "TOPLEFT", -2, 2)
         rowButton:SetPoint("BOTTOMRIGHT", titleFS, "BOTTOMRIGHT", 2, -2)
         rowButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
         rowButton:SetScript("OnClick", function(self, button)
             if button == "RightButton" then
-                -- Create context menu using modern API
                 MenuUtil.CreateContextMenu(UIParent, function(owner, rootDescription)
                     rootDescription:CreateTitle(row.title)
                     rootDescription:CreateButton("Share Quest", function()
-                        -- Select the quest in the quest log first, then share it
                         C_QuestLog.SetSelectedQuest(row.id)
                         QuestLogPushQuest()
                     end)
@@ -746,7 +850,6 @@ function PrintQuestIDs(silentRefresh)
             if row.tag and row.tag.tagName then
                 GameTooltip:AddLine("Tag: " .. row.tag.tagName, 0.8,0.8,0.8)
             end
-            -- Party member aggregation - check who has this quest
             if IsInGroup() then
                 local hasMembers = {}
                 for i = 1, GetNumGroupMembers() do
@@ -786,6 +889,96 @@ function PrintQuestIDs(silentRefresh)
     local totalHeight = (-yOff) + 4
     questScrollChild:SetHeight(totalHeight)
     questWindow:Show()
+end
+
+-- Recently Completed Party Quests window
+local recentlyCompletedWindow, rcScrollFrame, rcScrollChild
+
+local function RefreshRecentlyCompletedWindow()
+    if not recentlyCompletedWindow then return end
+    if rcScrollChild.lines then
+        for _, el in ipairs(rcScrollChild.lines) do el:Hide() end
+        wipe(rcScrollChild.lines)
+    end
+    rcScrollChild.lines = {}
+
+    local count = 0
+    for _ in pairs(recentlyCompletedQuests) do count = count + 1 end
+    if count == 0 then
+        recentlyCompletedWindow:Hide()
+        return
+    end
+
+    local yOff = -2
+    for questID, data in pairs(recentlyCompletedQuests) do
+        local line = rcScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        line:SetPoint("TOPLEFT", 8, yOff)
+        line:SetJustifyH("LEFT")
+        line:SetTextColor(1, 1, 1)
+        line:SetText(string.format("%s  |cff90ee90(by %s)|r", data.title, data.completedBy))
+        table.insert(rcScrollChild.lines, line)
+        yOff = yOff - 18
+    end
+    rcScrollChild:SetHeight((-yOff) + 4)
+end
+
+local function CreateRecentlyCompletedWindow()
+    if recentlyCompletedWindow then return end
+    recentlyCompletedWindow = CreateFrame("Frame", "QuestCoopRecentlyCompletedWindow", UIParent, "BackdropTemplate")
+    recentlyCompletedWindow:SetSize(360, 200)
+    recentlyCompletedWindow:SetPoint("CENTER", 0, -120)
+    recentlyCompletedWindow:SetMovable(true)
+    recentlyCompletedWindow:EnableMouse(true)
+    recentlyCompletedWindow:RegisterForDrag("LeftButton")
+    recentlyCompletedWindow:SetScript("OnDragStart", function(self) self:StartMoving() end)
+    recentlyCompletedWindow:SetScript("OnDragStop", function(self) self:StopMovingOrSizing() end)
+    recentlyCompletedWindow:SetBackdrop({bgFile = "Interface/Tooltips/UI-Tooltip-Background", edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16, insets = {left = 4, right = 4, top = 4, bottom = 4}})
+    recentlyCompletedWindow:SetBackdropColor(0, 0, 0, 0.85)
+    recentlyCompletedWindow:Hide()
+
+    local title = recentlyCompletedWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+    title:SetPoint("TOP", 0, -10)
+    title:SetText("Recently Completed Party Quests")
+
+    local close = CreateFrame("Button", nil, recentlyCompletedWindow, "UIPanelCloseButton")
+    close:SetPoint("TOPRIGHT", 0, 0)
+
+    rcScrollFrame = CreateFrame("ScrollFrame", "QuestCoopRCScroll", recentlyCompletedWindow, "UIPanelScrollFrameTemplate")
+    rcScrollFrame:SetPoint("TOPLEFT", 16, -40)
+    rcScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
+
+    rcScrollChild = CreateFrame("Frame", nil, rcScrollFrame)
+    rcScrollChild:SetSize(300, 1)
+    rcScrollFrame:SetScrollChild(rcScrollChild)
+    rcScrollChild.lines = {}
+end
+
+local function ShowRecentlyCompletedWindow()
+    CreateRecentlyCompletedWindow()
+    RefreshRecentlyCompletedWindow()
+    local count = 0
+    for _ in pairs(recentlyCompletedQuests) do count = count + 1 end
+    if count > 0 then recentlyCompletedWindow:Show() end
+end
+
+local function ToggleRecentlyCompletedWindow()
+    CreateRecentlyCompletedWindow()
+    if recentlyCompletedWindow:IsShown() then
+        recentlyCompletedWindow:Hide()
+    else
+        ShowRecentlyCompletedWindow()
+    end
+end
+
+local function AddQuestToRecentlyCompleted(questID, title, completedBy)
+    recentlyCompletedQuests[questID] = {title = title, completedBy = completedBy}
+    ShowRecentlyCompletedWindow()
+end
+
+local function RemoveQuestFromRecentlyCompleted(questID)
+    recentlyCompletedQuests[questID] = nil
+    pendingCompletedQuests[questID] = nil
+    if recentlyCompletedWindow then RefreshRecentlyCompletedWindow() end
 end
 
 -- Minimap button creation
@@ -932,14 +1125,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Register addon message prefix for leader sync
         C_ChatInfo.RegisterAddonMessagePrefix("QuestCoop")
 
-        -- Run initial auto-sync and leader broadcast after login
+        -- Run initial auto-sync and leader/untracked broadcast after login
         C_Timer.After(2, function()
             AutoSyncQuestTracking()
             BroadcastLeaderPref()
+            BroadcastUntrackedQuests()
         end)
     end
     -- Auto-refresh triggers
-    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" or event == "GROUP_ROSTER_UPDATE" then
+    if event == "QUEST_ACCEPTED" or event == "QUEST_REMOVED" or event == "QUEST_WATCH_LIST_CHANGED" or event == "QUEST_LOG_UPDATE" or event == "GROUP_ROSTER_UPDATE" or event == "QUEST_TURNED_IN" then
         RefreshQuestWindowIfVisible()
         -- Also trigger auto-sync on these events
         AutoSyncQuestTracking()
@@ -947,6 +1141,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "GROUP_ROSTER_UPDATE" then
         CleanupLeaderPrefs()
         C_Timer.After(1, BroadcastLeaderPref)
+        C_Timer.After(1.5, BroadcastUntrackedQuests)
     end
     -- Monitor for quest share acceptance
     if event == "CHAT_MSG_SYSTEM" then
@@ -964,6 +1159,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
             end)
         end
     end
+    if event == "QUEST_TURNED_IN" then
+        local questID = ...
+        if questID then
+            BroadcastQuestCompleted(questID)
+            RemoveQuestFromRecentlyCompleted(questID)
+        end
+    end
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
         if prefix == "QuestCoop" then
@@ -971,6 +1173,47 @@ frame:SetScript("OnEvent", function(self, event, ...)
             if pref then
                 leaderPrefs[ShortName(sender)] = (pref == "1")
                 RefreshQuestWindowIfVisible()
+                -- If the leader changed, request their untracked list via a re-broadcast.
+                C_Timer.After(0.5, BroadcastUntrackedQuests)
+            end
+
+            -- UNTRACKED_QUESTS: apply only when it comes from the current leader.
+            local untrackedPayload = message:match("^UNTRACKED_QUESTS|(.*)$")
+            if untrackedPayload then
+                local senderShort = ShortName(sender)
+                local leaderName = GetQuestCoopLeader()
+                local selfName2 = ShortName(UnitName("player"))
+                if senderShort == leaderName and leaderName ~= selfName2 then
+                    receivedUntrackedQuests = {}
+                    if untrackedPayload ~= "" then
+                        for idStr in untrackedPayload:gmatch("[^,]+") do
+                            local qid = tonumber(idStr)
+                            if qid then
+                                receivedUntrackedQuests[qid] = true
+                                if C_QuestLog.RemoveQuestWatch then C_QuestLog.RemoveQuestWatch(qid) end
+                            end
+                        end
+                    end
+                    RefreshQuestWindowIfVisible()
+                    AutoSyncQuestTracking()
+                end
+            end
+
+            -- QUEST_COMPLETED: another party member finished a quest.
+            local completedPayload = message:match("^QUEST_COMPLETED|(.+)$")
+            if completedPayload then
+                local questIDStr, title = completedPayload:match("^(%d+)|(.*)$")
+                local questID = tonumber(questIDStr)
+                if questID and title and not pendingCompletedQuests[questID] then
+                    local senderShort = ShortName(sender)
+                    pendingCompletedQuests[questID] = true
+                    C_Timer.After(10, function()
+                        if pendingCompletedQuests[questID] then
+                            pendingCompletedQuests[questID] = nil
+                            AddQuestToRecentlyCompleted(questID, title, senderShort)
+                        end
+                    end)
+                end
             end
         end
     end
@@ -984,3 +1227,4 @@ frame:RegisterEvent("QUEST_LOG_UPDATE")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_SYSTEM")
 frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:RegisterEvent("QUEST_TURNED_IN")
