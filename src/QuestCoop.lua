@@ -1010,7 +1010,7 @@ local function ShowRecentlyCompletedWindow()
     if count > 0 then recentlyCompletedWindow:Show() end
 end
 
-local function ToggleRecentlyCompletedWindow()
+ToggleRecentlyCompletedWindow = function()
     CreateRecentlyCompletedWindow()
     if recentlyCompletedWindow:IsShown() then
         recentlyCompletedWindow:Hide()
