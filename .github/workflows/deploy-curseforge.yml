@@ -1,32 +1,19 @@
-name: Deploy to CurseForge
+name: Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - '*'
 
 jobs:
-  deploy:
+  release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Package Addon
-        run: |
-          mkdir -p release/QuestCoop
-          cp -r QuestCoop.toc src/ LICENSE README.md release/QuestCoop/
-          cd release
-          zip -r QuestCoop.zip QuestCoop/
-
-      - name: Upload to CurseForge
-        uses: itsmeow/curseforge-upload@v3
+      - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.CURSEFORGE_SECRET }}
-          project_id: "1386288"
-          game_endpoint: wow
-          file_path: release/QuestCoop.zip
-          release_type: release
-          changelog: "See https://github.com/${{ github.repository }}/commits/main"
-          changelog_type: markdown
-          game_versions: "Retail"
+          fetch-depth: 0
+
+      - uses: BigWigsMods/packager@v2
+        env:
+          CF_API_KEY: ${{ secrets.CURSEFORGE_SECRET }}
+          GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
