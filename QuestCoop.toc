@@ -1,7 +1,7 @@
 ## Interface: 120001
 ## Title: Quest Coop
 ## Notes: Hides all quests from the quest tracker
-## Author: Tobie Tusing
+## Author: heartbourne
 ## Version: @project-version@
 ## X-Curse-Project-ID: 1386288
 ## SavedVariables: QuestCoopDB
