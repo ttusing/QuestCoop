@@ -1,0 +1,7 @@
+package-as: QuestCoop
+
+ignore:
+  - .github
+  - .vscode
+  - screenshot.png
+  - README.md
