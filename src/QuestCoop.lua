@@ -502,62 +502,61 @@ local function RefreshAchievementWindow()
     else
         for achievementID in pairs(trackedSet) do
             local id, name, points, completed, month, day, year, description, flags, icon, rewardText, isGuild, wasEarnedByMe = GetAchievementInfo(achievementID)
-            if not id then goto continue end
+            if id then
+                -- Icon
+                local iconTex = achievementScrollChild:CreateTexture(nil, "OVERLAY")
+                iconTex:SetSize(16, 16)
+                iconTex:SetPoint("TOPLEFT", 4, yOff)
+                if icon then iconTex:SetTexture(icon) end
+                table.insert(achievementScrollChild.lines, iconTex)
 
-            -- Icon
-            local iconTex = achievementScrollChild:CreateTexture(nil, "OVERLAY")
-            iconTex:SetSize(16, 16)
-            iconTex:SetPoint("TOPLEFT", 4, yOff)
-            if icon then iconTex:SetTexture(icon) end
-            table.insert(achievementScrollChild.lines, iconTex)
-
-            -- Name
-            local nameFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-            nameFS:SetPoint("TOPLEFT", 24, yOff)
-            nameFS:SetJustifyH("LEFT")
-            if wasEarnedByMe then
-                nameFS:SetTextColor(0.3, 1, 0.3) -- green = already earned
-            else
-                nameFS:SetTextColor(1, 1, 1)
-            end
-            nameFS:SetText(name or ("Achievement " .. achievementID))
-            table.insert(achievementScrollChild.lines, nameFS)
-
-            -- Points (right-justified)
-            local pointsFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            pointsFS:SetPoint("TOPRIGHT", achievementScrollChild, "TOPRIGHT", -8, yOff)
-            pointsFS:SetJustifyH("RIGHT")
-            pointsFS:SetTextColor(1, 0.82, 0)
-            pointsFS:SetText(tostring(points or 0) .. " pts")
-            table.insert(achievementScrollChild.lines, pointsFS)
-
-            yOff = yOff - 18
-
-            -- Criteria rows
-            local numCriteria = GetAchievementNumCriteria(achievementID)
-            for i = 1, (numCriteria or 0) do
-                local criteriaString, criteriaType, criteriaCompleted, quantity, reqQuantity, charName, flags2, assetID, quantityString, criteriaID, eligible = GetAchievementCriteriaInfo(achievementID, i)
-                if criteriaString and criteriaString ~= "" then
-                    local criteriaFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                    criteriaFS:SetPoint("TOPLEFT", 32, yOff)
-                    criteriaFS:SetJustifyH("LEFT")
-                    if criteriaCompleted then
-                        criteriaFS:SetTextColor(0.3, 1, 0.3)
-                    else
-                        criteriaFS:SetTextColor(0.6, 0.6, 0.6)
-                    end
-                    local qtyStr = ""
-                    if reqQuantity and reqQuantity > 1 then
-                        qtyStr = string.format(" (%d/%d)", quantity or 0, reqQuantity)
-                    end
-                    criteriaFS:SetText(criteriaString .. qtyStr)
-                    table.insert(achievementScrollChild.lines, criteriaFS)
-                    yOff = yOff - 14
+                -- Name
+                local nameFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+                nameFS:SetPoint("TOPLEFT", 24, yOff)
+                nameFS:SetJustifyH("LEFT")
+                if wasEarnedByMe then
+                    nameFS:SetTextColor(0.3, 1, 0.3) -- green = already earned
+                else
+                    nameFS:SetTextColor(1, 1, 1)
                 end
-            end
+                nameFS:SetText(name or ("Achievement " .. achievementID))
+                table.insert(achievementScrollChild.lines, nameFS)
 
-            yOff = yOff - 4
-            ::continue::
+                -- Points (right-justified)
+                local pointsFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                pointsFS:SetPoint("TOPRIGHT", achievementScrollChild, "TOPRIGHT", -8, yOff)
+                pointsFS:SetJustifyH("RIGHT")
+                pointsFS:SetTextColor(1, 0.82, 0)
+                pointsFS:SetText(tostring(points or 0) .. " pts")
+                table.insert(achievementScrollChild.lines, pointsFS)
+
+                yOff = yOff - 18
+
+                -- Criteria rows
+                local numCriteria = GetAchievementNumCriteria(achievementID)
+                for i = 1, (numCriteria or 0) do
+                    local criteriaString, criteriaType, criteriaCompleted, quantity, reqQuantity = GetAchievementCriteriaInfo(achievementID, i)
+                    if criteriaString and criteriaString ~= "" then
+                        local criteriaFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+                        criteriaFS:SetPoint("TOPLEFT", 32, yOff)
+                        criteriaFS:SetJustifyH("LEFT")
+                        if criteriaCompleted then
+                            criteriaFS:SetTextColor(0.3, 1, 0.3)
+                        else
+                            criteriaFS:SetTextColor(0.6, 0.6, 0.6)
+                        end
+                        local qtyStr = ""
+                        if reqQuantity and reqQuantity > 1 then
+                            qtyStr = string.format(" (%d/%d)", quantity or 0, reqQuantity)
+                        end
+                        criteriaFS:SetText(criteriaString .. qtyStr)
+                        table.insert(achievementScrollChild.lines, criteriaFS)
+                        yOff = yOff - 14
+                    end
+                end
+
+                yOff = yOff - 4
+            end
         end
     end
 
