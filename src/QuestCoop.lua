@@ -4,6 +4,7 @@ local addonName, addon = ...
 local DEFAULT_SETTINGS = {
     textSize = "medium", -- small, medium, large
     alwaysLeader = false,
+    showWorldQuestsInRecent = false,
 }
 
 local function ShortName(name)
@@ -45,10 +46,12 @@ local leaderPrefs = {}
 -- Untracked quests received from the QuestCoop leader (runtime only, not saved).
 local receivedUntrackedQuests = {}
 
--- Recently completed quests shown in the recently completed window: {[questID] = {title, completedBy}}
+-- Recently completed quests shown in the recently completed window: {[questID] = {title, completors={}, completorSet={}}}
 local recentlyCompletedQuests = {}
 -- Quests waiting for the 10-second grace period before appearing in the window.
 local pendingCompletedQuests = {}
+-- Quests the local player has turned in this session, used to suppress redundant entries.
+local selfCompletedQuests = {}
 
 -- Broadcast our "always leader" preference to the party.
 local function BroadcastLeaderPref()
@@ -155,6 +158,7 @@ end
 -- Broadcast completion of a quest to party members.
 local function BroadcastQuestCompleted(questID)
     if not IsInGroup() then return end
+    if not GetSetting("showWorldQuestsInRecent") and C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(questID) then return end
     local title = (C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)) or ("Quest " .. questID)
     C_ChatInfo.SendAddonMessage("QuestCoop", string.format("QUEST_COMPLETED|%d|%s", questID, title or ""), "PARTY")
 end
@@ -399,6 +403,18 @@ local function CreateSettingsPanel()
     local alwaysLeaderDesc = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontHighlightSmall")
     alwaysLeaderDesc:SetPoint("TOPLEFT", alwaysLeaderCheckbox, "BOTTOMLEFT", 4, -4)
     alwaysLeaderDesc:SetText("If multiple party members have this checked, the alphabetically earliest name leads. Overrides the WoW party leader.")
+
+    -- World Quests in Recently Completed Section
+    local worldQuestCheckbox = CreateFrame("CheckButton", "QuestCoopWorldQuestCheckbox", settingsPanel, "UICheckButtonTemplate")
+    worldQuestCheckbox:SetPoint("TOPLEFT", alwaysLeaderDesc, "BOTTOMLEFT", -4, -16)
+    worldQuestCheckbox:SetChecked(GetSetting("showWorldQuestsInRecent"))
+    worldQuestCheckbox:SetScript("OnClick", function(self)
+        SetSetting("showWorldQuestsInRecent", self:GetChecked())
+    end)
+
+    local worldQuestLabel = settingsPanel:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+    worldQuestLabel:SetPoint("LEFT", worldQuestCheckbox, "RIGHT", 2, 0)
+    worldQuestLabel:SetText("Show World Quests in Recently Completed")
 
     -- Register with Interface Options
     if InterfaceOptions_AddCategory then
@@ -934,12 +950,27 @@ local function RefreshRecentlyCompletedWindow()
 
     local yOff = -2
     for questID, data in pairs(recentlyCompletedQuests) do
-        local line = rcScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        line:SetPoint("TOPLEFT", 8, yOff)
+        local btn = CreateFrame("Button", nil, rcScrollChild)
+        btn:SetPoint("TOPLEFT", 8, yOff)
+        btn:SetSize(280, 18)
+        btn:RegisterForClicks("RightButtonUp")
+        btn:SetScript("OnClick", function()
+            RemoveQuestFromRecentlyCompleted(questID)
+        end)
+        btn:SetScript("OnEnter", function(self)
+            GameTooltip:SetOwner(self, "ANCHOR_CURSOR")
+            GameTooltip:SetText("Right-click to dismiss", 1, 1, 1)
+            GameTooltip:Show()
+        end)
+        btn:SetScript("OnLeave", function() GameTooltip:Hide() end)
+
+        local line = btn:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+        line:SetAllPoints()
         line:SetJustifyH("LEFT")
         line:SetTextColor(1, 1, 1)
-        line:SetText(string.format("%s  |cff90ee90(by %s)|r", data.title, data.completedBy))
-        table.insert(rcScrollChild.lines, line)
+        line:SetText(string.format("%s  |cff90ee90(by %s)|r", data.title, table.concat(data.completors, ", ")))
+
+        table.insert(rcScrollChild.lines, btn)
         yOff = yOff - 18
     end
     rcScrollChild:SetHeight((-yOff) + 4)
@@ -993,8 +1024,13 @@ ToggleRecentlyCompletedWindow = function()
     end
 end
 
-local function AddQuestToRecentlyCompleted(questID, title, completedBy)
-    recentlyCompletedQuests[questID] = {title = title, completedBy = completedBy}
+local function AddQuestToRecentlyCompleted(questID, title, completors, completorSet)
+    recentlyCompletedQuests[questID] = {title = title, completors = completors, completorSet = completorSet}
+    C_Timer.After(300, function()
+        if recentlyCompletedQuests[questID] then
+            RemoveQuestFromRecentlyCompleted(questID)
+        end
+    end)
     ShowRecentlyCompletedWindow()
 end
 
@@ -1185,6 +1221,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "QUEST_TURNED_IN" then
         local questID = ...
         if questID then
+            selfCompletedQuests[questID] = true
             BroadcastQuestCompleted(questID)
             RemoveQuestFromRecentlyCompleted(questID)
         end
@@ -1227,15 +1264,36 @@ frame:SetScript("OnEvent", function(self, event, ...)
             if completedPayload then
                 local questIDStr, title = completedPayload:match("^(%d+)|(.*)$")
                 local questID = tonumber(questIDStr)
-                if questID and title and not pendingCompletedQuests[questID] then
+                if questID and title and not selfCompletedQuests[questID] then
                     local senderShort = ShortName(sender)
-                    pendingCompletedQuests[questID] = true
-                    C_Timer.After(10, function()
-                        if pendingCompletedQuests[questID] then
-                            pendingCompletedQuests[questID] = nil
-                            AddQuestToRecentlyCompleted(questID, title, senderShort)
+                    if recentlyCompletedQuests[questID] then
+                        -- Already visible: add this completer if new
+                        local data = recentlyCompletedQuests[questID]
+                        if not data.completorSet[senderShort] then
+                            data.completorSet[senderShort] = true
+                            table.insert(data.completors, senderShort)
+                            RefreshRecentlyCompletedWindow()
                         end
-                    end)
+                    elseif not pendingCompletedQuests[questID] then
+                        -- Start grace period, collecting all completors that arrive
+                        pendingCompletedQuests[questID] = {title = title, completors = {senderShort}, completorSet = {[senderShort] = true}}
+                        C_Timer.After(10, function()
+                            if pendingCompletedQuests[questID] then
+                                local pending = pendingCompletedQuests[questID]
+                                pendingCompletedQuests[questID] = nil
+                                if not selfCompletedQuests[questID] then
+                                    AddQuestToRecentlyCompleted(questID, pending.title, pending.completors, pending.completorSet)
+                                end
+                            end
+                        end)
+                    else
+                        -- Already pending: add this completer to the pending batch
+                        local pending = pendingCompletedQuests[questID]
+                        if not pending.completorSet[senderShort] then
+                            pending.completorSet[senderShort] = true
+                            table.insert(pending.completors, senderShort)
+                        end
+                    end
                 end
             end
         end
