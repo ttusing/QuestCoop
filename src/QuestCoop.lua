@@ -52,10 +52,6 @@ local pendingCompletedQuests = {}
 
 -- Achievement tracking received from the QuestCoop leader (runtime only, not saved).
 local receivedTrackedAchievements = {}
--- Recently earned achievements shown in the achievement window: {[achievementID] = {name, earnedBy}}
-local recentlyEarnedAchievements = {}
--- Achievements waiting for the 10-second grace period before appearing in the window.
-local pendingEarnedAchievements = {}
 
 -- Broadcast our "always leader" preference to the party.
 local function BroadcastLeaderPref()
@@ -166,14 +162,6 @@ local function BroadcastQuestCompleted(questID)
     C_ChatInfo.SendAddonMessage("QuestCoop", string.format("QUEST_COMPLETED|%d|%s", questID, title or ""), "PARTY")
 end
 
--- Broadcast that we earned an achievement to party members.
-local function BroadcastAchievementEarned(achievementID)
-    if not IsInGroup() then return end
-    local _, name = GetAchievementInfo(achievementID)
-    if not name then return end
-    C_ChatInfo.SendAddonMessage("QuestCoop", string.format("ACHIEVEMENT_EARNED|%d|%s", achievementID, name), "PARTY")
-end
-
 -- Helper to get party member quest data using C_QuestLog.IsUnitOnQuest
 local function GetPartyMemberQuestData(unit, questID)
     if not C_QuestLog.IsUnitOnQuest then return nil end
@@ -249,20 +237,6 @@ local function AutoSyncQuestTracking()
     end
 end
 
--- Returns the effective set of tracked achievement IDs (leader's own or received from leader).
-local function GetEffectiveTrackedAchievements()
-    local selfName = ShortName(UnitName("player"))
-    if GetQuestCoopLeader() == selfName then
-        local set = {}
-        for _, id in ipairs({GetTrackedAchievements()}) do
-            set[id] = true
-        end
-        return set
-    else
-        return receivedTrackedAchievements
-    end
-end
-
 -- Broadcast the leader's tracked achievement list to the party.
 local function BroadcastTrackedAchievements()
     if not IsInGroup() then return end
@@ -329,14 +303,9 @@ end
 -- Forward declarations for functions defined later in the file
 local RefreshQuestWindowIfVisible
 local ToggleRecentlyCompletedWindow
-local RefreshAchievementWindowIfVisible
-local ToggleAchievementWindow
 
 -- Quest ID window (created lazily)
 local questWindow, questScrollFrame, questScrollChild, questLeaderLabel
-
--- Achievement window (created lazily)
-local achievementWindow, achievementScrollFrame, achievementScrollChild, achievementLeaderLabel
 local function CreateQuestWindow()
     if questWindow then return end
     questWindow = CreateFrame("Frame", "QuestCoopQuestWindow", UIParent, "BackdropTemplate")
@@ -374,14 +343,8 @@ local function CreateQuestWindow()
     rcBtn:SetText("Recently Completed")
     rcBtn:SetScript("OnClick", function() ToggleRecentlyCompletedWindow() end)
 
-    local achBtn = CreateFrame("Button", nil, questWindow, "UIPanelButtonTemplate")
-    achBtn:SetSize(170, 20)
-    achBtn:SetPoint("TOP", rcBtn, "BOTTOM", 0, -4)
-    achBtn:SetText("Tracked Achievements")
-    achBtn:SetScript("OnClick", function() ToggleAchievementWindow() end)
-
     questScrollFrame = CreateFrame("ScrollFrame", "QuestCoopQuestScroll", questWindow, "UIPanelScrollFrameTemplate")
-    questScrollFrame:SetPoint("TOPLEFT", 16, -106)
+    questScrollFrame:SetPoint("TOPLEFT", 16, -82)
     questScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
 
     questScrollChild = CreateFrame("Frame", nil, questScrollFrame)
@@ -404,222 +367,6 @@ local function CreateQuestWindow()
         QuestCoopDB.questWindowHeight = questWindow:GetHeight()
         RefreshQuestWindowIfVisible()
     end)
-end
-
-local function CreateAchievementWindow()
-    if achievementWindow then return end
-    achievementWindow = CreateFrame("Frame", "QuestCoopAchievementWindow", UIParent, "BackdropTemplate")
-
-    local savedW = QuestCoopDB and QuestCoopDB.achievementWindowWidth or 400
-    local savedH = QuestCoopDB and QuestCoopDB.achievementWindowHeight or 300
-    achievementWindow:SetSize(savedW, savedH)
-    if QuestCoopDB and QuestCoopDB.achievementWindowX then
-        achievementWindow:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", QuestCoopDB.achievementWindowX, QuestCoopDB.achievementWindowY)
-    else
-        achievementWindow:SetPoint("CENTER", 0, -60)
-    end
-    achievementWindow:SetMovable(true)
-    achievementWindow:SetResizable(true)
-    achievementWindow:SetResizeBounds(280, 200)
-    achievementWindow:EnableMouse(true)
-    achievementWindow:RegisterForDrag("LeftButton")
-    achievementWindow:SetScript("OnDragStart", function(self) self:StartMoving() end)
-    achievementWindow:SetScript("OnDragStop", function(self)
-        self:StopMovingOrSizing()
-        if not QuestCoopDB then QuestCoopDB = {} end
-        local point, _, _, x, y = self:GetPoint()
-        QuestCoopDB.achievementWindowX = x
-        QuestCoopDB.achievementWindowY = y
-    end)
-    achievementWindow:SetBackdrop({bgFile = "Interface/Tooltips/UI-Tooltip-Background", edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16, insets = {left = 4, right = 4, top = 4, bottom = 4}})
-    achievementWindow:SetBackdropColor(0, 0, 0, 0.85)
-    achievementWindow:Hide()
-
-    local title = achievementWindow:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    title:SetPoint("TOP", 0, -10)
-    title:SetText("Achievement Co-op")
-
-    achievementLeaderLabel = achievementWindow:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-    achievementLeaderLabel:SetPoint("TOP", 0, -30)
-    achievementLeaderLabel:SetTextColor(1, 0.85, 0)
-    achievementLeaderLabel:SetText("QuestCoop Leader: ...")
-
-    local close = CreateFrame("Button", nil, achievementWindow, "UIPanelCloseButton")
-    close:SetPoint("TOPRIGHT", 0, 0)
-
-    achievementScrollFrame = CreateFrame("ScrollFrame", "QuestCoopAchievementScroll", achievementWindow, "UIPanelScrollFrameTemplate")
-    achievementScrollFrame:SetPoint("TOPLEFT", 16, -50)
-    achievementScrollFrame:SetPoint("BOTTOMRIGHT", -30, 16)
-
-    achievementScrollChild = CreateFrame("Frame", nil, achievementScrollFrame)
-    achievementScrollChild:SetSize(360, 1)
-    achievementScrollFrame:SetScrollChild(achievementScrollChild)
-    achievementScrollChild.lines = {}
-
-    local resizeHandle = CreateFrame("Button", nil, achievementWindow)
-    resizeHandle:SetSize(16, 16)
-    resizeHandle:SetPoint("BOTTOMRIGHT", -4, 4)
-    resizeHandle:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    resizeHandle:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
-    resizeHandle:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
-    resizeHandle:SetScript("OnMouseDown", function() achievementWindow:StartSizing("BOTTOMRIGHT") end)
-    resizeHandle:SetScript("OnMouseUp", function()
-        achievementWindow:StopMovingOrSizing()
-        if not QuestCoopDB then QuestCoopDB = {} end
-        QuestCoopDB.achievementWindowWidth  = achievementWindow:GetWidth()
-        QuestCoopDB.achievementWindowHeight = achievementWindow:GetHeight()
-        RefreshAchievementWindowIfVisible()
-    end)
-end
-
-local function RefreshAchievementWindow()
-    if not achievementWindow then return end
-    if achievementScrollChild.lines then
-        for _, el in ipairs(achievementScrollChild.lines) do el:Hide() end
-        wipe(achievementScrollChild.lines)
-    end
-    achievementScrollChild.lines = {}
-
-    if achievementLeaderLabel then
-        achievementLeaderLabel:SetText("QuestCoop Leader: " .. GetQuestCoopLeader())
-    end
-
-    local trackedSet = GetEffectiveTrackedAchievements()
-    local yOff = -4
-
-    -- Count tracked
-    local trackedCount = 0
-    for _ in pairs(trackedSet) do trackedCount = trackedCount + 1 end
-
-    if trackedCount == 0 then
-        local emptyMsg = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-        emptyMsg:SetPoint("TOPLEFT", 8, yOff)
-        emptyMsg:SetJustifyH("LEFT")
-        emptyMsg:SetTextColor(0.6, 0.6, 0.6)
-        emptyMsg:SetText("No achievements tracked by leader.")
-        table.insert(achievementScrollChild.lines, emptyMsg)
-        yOff = yOff - 18
-    else
-        for achievementID in pairs(trackedSet) do
-            local id, name, points, completed, month, day, year, description, flags, icon, rewardText, isGuild, wasEarnedByMe = GetAchievementInfo(achievementID)
-            if id then
-                -- Icon
-                local iconTex = achievementScrollChild:CreateTexture(nil, "OVERLAY")
-                iconTex:SetSize(16, 16)
-                iconTex:SetPoint("TOPLEFT", 4, yOff)
-                if icon then iconTex:SetTexture(icon) end
-                table.insert(achievementScrollChild.lines, iconTex)
-
-                -- Name
-                local nameFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-                nameFS:SetPoint("TOPLEFT", 24, yOff)
-                nameFS:SetJustifyH("LEFT")
-                if wasEarnedByMe then
-                    nameFS:SetTextColor(0.3, 1, 0.3) -- green = already earned
-                else
-                    nameFS:SetTextColor(1, 1, 1)
-                end
-                nameFS:SetText(name or ("Achievement " .. achievementID))
-                table.insert(achievementScrollChild.lines, nameFS)
-
-                -- Points (right-justified)
-                local pointsFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                pointsFS:SetPoint("TOPRIGHT", achievementScrollChild, "TOPRIGHT", -8, yOff)
-                pointsFS:SetJustifyH("RIGHT")
-                pointsFS:SetTextColor(1, 0.82, 0)
-                pointsFS:SetText(tostring(points or 0) .. " pts")
-                table.insert(achievementScrollChild.lines, pointsFS)
-
-                yOff = yOff - 18
-
-                -- Criteria rows
-                local numCriteria = GetAchievementNumCriteria(achievementID)
-                for i = 1, (numCriteria or 0) do
-                    local criteriaString, criteriaType, criteriaCompleted, quantity, reqQuantity = GetAchievementCriteriaInfo(achievementID, i)
-                    if criteriaString and criteriaString ~= "" then
-                        local criteriaFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-                        criteriaFS:SetPoint("TOPLEFT", 32, yOff)
-                        criteriaFS:SetJustifyH("LEFT")
-                        if criteriaCompleted then
-                            criteriaFS:SetTextColor(0.3, 1, 0.3)
-                        else
-                            criteriaFS:SetTextColor(0.6, 0.6, 0.6)
-                        end
-                        local qtyStr = ""
-                        if reqQuantity and reqQuantity > 1 then
-                            qtyStr = string.format(" (%d/%d)", quantity or 0, reqQuantity)
-                        end
-                        criteriaFS:SetText(criteriaString .. qtyStr)
-                        table.insert(achievementScrollChild.lines, criteriaFS)
-                        yOff = yOff - 14
-                    end
-                end
-
-                yOff = yOff - 4
-            end
-        end
-    end
-
-    -- Recently Earned section
-    local earnedCount = 0
-    for _ in pairs(recentlyEarnedAchievements) do earnedCount = earnedCount + 1 end
-    if earnedCount > 0 then
-        yOff = yOff - 6
-        local divider = achievementScrollChild:CreateTexture(nil, "OVERLAY")
-        divider:SetPoint("TOPLEFT", 8, yOff + 6)
-        divider:SetPoint("TOPRIGHT", -8, yOff + 6)
-        divider:SetHeight(1)
-        divider:SetColorTexture(0.4, 0.4, 0.4, 0.8)
-        table.insert(achievementScrollChild.lines, divider)
-        yOff = yOff - 4
-
-        local sectionLabel = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-        sectionLabel:SetPoint("TOPLEFT", 8, yOff)
-        sectionLabel:SetJustifyH("LEFT")
-        sectionLabel:SetTextColor(1, 0.82, 0)
-        sectionLabel:SetText("Recently Earned:")
-        table.insert(achievementScrollChild.lines, sectionLabel)
-        yOff = yOff - 18
-
-        for _, data in pairs(recentlyEarnedAchievements) do
-            local earnedFS = achievementScrollChild:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-            earnedFS:SetPoint("TOPLEFT", 16, yOff)
-            earnedFS:SetJustifyH("LEFT")
-            earnedFS:SetTextColor(1, 0.82, 0)
-            earnedFS:SetText(string.format("%s — by %s", data.name, data.earnedBy))
-            table.insert(achievementScrollChild.lines, earnedFS)
-            yOff = yOff - 16
-        end
-    end
-
-    achievementScrollChild:SetHeight((-yOff) + 4)
-    achievementScrollChild:SetWidth(math.max(achievementScrollFrame:GetWidth(), 200))
-end
-
-RefreshAchievementWindowIfVisible = function()
-    if not achievementWindow or not achievementWindow:IsShown() then return end
-    RefreshAchievementWindow()
-end
-
-ToggleAchievementWindow = function()
-    CreateAchievementWindow()
-    if achievementWindow:IsShown() then
-        achievementWindow:Hide()
-    else
-        RefreshAchievementWindow()
-        achievementWindow:Show()
-    end
-end
-
-local function AddAchievementToRecentlyEarned(achievementID, name, earnedBy)
-    recentlyEarnedAchievements[achievementID] = {name = name, earnedBy = earnedBy}
-    RefreshAchievementWindowIfVisible()
-end
-
-local function RemoveAchievementFromRecentlyEarned(achievementID)
-    recentlyEarnedAchievements[achievementID] = nil
-    pendingEarnedAchievements[achievementID] = nil
-    RefreshAchievementWindowIfVisible()
 end
 
 -- Settings panel
@@ -1439,8 +1186,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 elseif Settings and Settings.OpenToCategory then
                     Settings.OpenToCategory(settingsPanel.name)
                 end
-            elseif msg == "achievements" or msg == "ach" then
-                ToggleAchievementWindow()
             else
                 PrintQuestIDs()
             end
@@ -1498,13 +1243,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
             BroadcastTrackedAchievements()
         end
         -- Non-leaders do NOT call AutoSyncAchievementTracking here — only on incoming addon message
-        RefreshAchievementWindowIfVisible()
-    end
-    if event == "ACHIEVEMENT_EARNED" then
-        local achievementID = ...
-        if achievementID then
-            BroadcastAchievementEarned(achievementID)
-        end
     end
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
@@ -1555,24 +1293,6 @@ frame:SetScript("OnEvent", function(self, event, ...)
                         end
                     end
                     AutoSyncAchievementTracking()
-                    RefreshAchievementWindowIfVisible()
-                end
-            end
-
-            -- ACHIEVEMENT_EARNED: another party member earned an achievement.
-            local earnedPayload = message:match("^ACHIEVEMENT_EARNED|(.+)$")
-            if earnedPayload then
-                local idStr, achName = earnedPayload:match("^(%d+)|(.*)$")
-                local achievementID = tonumber(idStr)
-                if achievementID and achName and not pendingEarnedAchievements[achievementID] then
-                    local senderShort = ShortName(sender)
-                    pendingEarnedAchievements[achievementID] = true
-                    C_Timer.After(10, function()
-                        if pendingEarnedAchievements[achievementID] then
-                            pendingEarnedAchievements[achievementID] = nil
-                            AddAchievementToRecentlyEarned(achievementID, achName, senderShort)
-                        end
-                    end)
                 end
             end
 
@@ -1606,4 +1326,3 @@ frame:RegisterEvent("CHAT_MSG_SYSTEM")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("QUEST_TURNED_IN")
 frame:RegisterEvent("TRACKED_ACHIEVEMENT_LIST_CHANGED")
-frame:RegisterEvent("ACHIEVEMENT_EARNED")
