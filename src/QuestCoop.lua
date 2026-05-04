@@ -237,13 +237,18 @@ local function AutoSyncQuestTracking()
     end
 end
 
+local function GetTrackedAchievementIDs()
+    if not GetTrackedAchievements then return {} end
+    return {GetTrackedAchievements()}
+end
+
 -- Broadcast the leader's tracked achievement list to the party.
 local function BroadcastTrackedAchievements()
     if not IsInGroup() then return end
     local selfName = ShortName(UnitName("player"))
     if GetQuestCoopLeader() ~= selfName then return end
     local ids = {}
-    for _, id in ipairs({GetTrackedAchievements()}) do
+    for _, id in ipairs(GetTrackedAchievementIDs()) do
         table.insert(ids, tostring(id))
     end
     C_ChatInfo.SendAddonMessage("QuestCoop", "TRACKED_ACHIEVEMENTS|" .. table.concat(ids, ","), "PARTY")
@@ -254,7 +259,7 @@ local function AutoSyncAchievementTracking()
     local selfName = ShortName(UnitName("player"))
     if GetQuestCoopLeader() == selfName then return end
     local wantedSet = receivedTrackedAchievements
-    local currentTracked = {GetTrackedAchievements()}
+    local currentTracked = GetTrackedAchievementIDs()
     -- Remove first (prevents hitting the 10-cap before clearing unwanted)
     for _, id in ipairs(currentTracked) do
         if not wantedSet[id] then
@@ -262,11 +267,11 @@ local function AutoSyncAchievementTracking()
         end
     end
     -- Then add wanted achievements
-    local count = GetNumTrackedAchievements and GetNumTrackedAchievements() or #({GetTrackedAchievements()})
+    local count = GetNumTrackedAchievements and GetNumTrackedAchievements() or #GetTrackedAchievementIDs()
     local capped = false
     for id in pairs(wantedSet) do
         local alreadyTracked = false
-        for _, tid in ipairs({GetTrackedAchievements()}) do
+        for _, tid in ipairs(GetTrackedAchievementIDs()) do
             if tid == id then alreadyTracked = true; break end
         end
         if not alreadyTracked then
