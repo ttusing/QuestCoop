@@ -53,6 +53,9 @@ local pendingCompletedQuests = {}
 -- Quests the local player has turned in this session, used to suppress redundant entries.
 local selfCompletedQuests = {}
 
+-- Achievement tracking received from the QuestCoop leader (runtime only, not saved).
+local receivedTrackedAchievements = {}
+
 -- Broadcast our "always leader" preference to the party.
 local function BroadcastLeaderPref()
     if not IsInGroup() then return end
@@ -235,6 +238,54 @@ local function AutoSyncQuestTracking()
                 end
             end
         end
+    end
+end
+
+local function GetTrackedAchievementIDs()
+    if not GetTrackedAchievements then return {} end
+    return {GetTrackedAchievements()}
+end
+
+-- Broadcast the leader's tracked achievement list to the party.
+local function BroadcastTrackedAchievements()
+    if not IsInGroup() then return end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() ~= selfName then return end
+    local ids = {}
+    for _, id in ipairs(GetTrackedAchievementIDs()) do
+        table.insert(ids, tostring(id))
+    end
+    C_ChatInfo.SendAddonMessage("QuestCoop", "TRACKED_ACHIEVEMENTS|" .. table.concat(ids, ","), "PARTY")
+end
+
+-- Sync local achievement tracking to match the leader's list (non-leaders only).
+local function AutoSyncAchievementTracking()
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() == selfName then return end
+    local wantedSet = receivedTrackedAchievements
+    local currentTracked = GetTrackedAchievementIDs()
+    -- Remove first (prevents hitting the 10-cap before clearing unwanted)
+    for _, id in ipairs(currentTracked) do
+        if not wantedSet[id] then
+            RemoveTrackedAchievement(id)
+        end
+    end
+    -- Then add wanted achievements
+    local count = GetNumTrackedAchievements and GetNumTrackedAchievements() or #GetTrackedAchievementIDs()
+    local capped = false
+    for id in pairs(wantedSet) do
+        local alreadyTracked = false
+        for _, tid in ipairs(GetTrackedAchievementIDs()) do
+            if tid == id then alreadyTracked = true; break end
+        end
+        if not alreadyTracked then
+            if count >= 10 then capped = true; break end
+            AddTrackedAchievement(id)
+            count = count + 1
+        end
+    end
+    if capped then
+        print("|cffff9900QuestCoop:|r Achievement sync capped at 10 — some achievements skipped.")
     end
 end
 
@@ -1189,6 +1240,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
             AutoSyncQuestTracking()
             BroadcastLeaderPref()
             BroadcastUntrackedQuests()
+            BroadcastTrackedAchievements()
         end)
     end
     -- Auto-refresh triggers
@@ -1201,6 +1253,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
         CleanupLeaderPrefs()
         C_Timer.After(1, BroadcastLeaderPref)
         C_Timer.After(1.5, BroadcastUntrackedQuests)
+        C_Timer.After(1.5, BroadcastTrackedAchievements)
     end
     -- Monitor for quest share acceptance
     if event == "CHAT_MSG_SYSTEM" then
@@ -1226,6 +1279,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
             RemoveQuestFromRecentlyCompleted(questID)
         end
     end
+    if event == "TRACKED_ACHIEVEMENT_LIST_CHANGED" then
+        local selfName = ShortName(UnitName("player"))
+        if GetQuestCoopLeader() == selfName then
+            BroadcastTrackedAchievements()
+        end
+        -- Non-leaders do NOT call AutoSyncAchievementTracking here — only on incoming addon message
+    end
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
         if prefix == "QuestCoop" then
@@ -1233,8 +1293,9 @@ frame:SetScript("OnEvent", function(self, event, ...)
             if pref then
                 leaderPrefs[ShortName(sender)] = (pref == "1")
                 RefreshQuestWindowIfVisible()
-                -- If the leader changed, request their untracked list via a re-broadcast.
+                -- If the leader changed, re-broadcast both untracked quests and tracked achievements.
                 C_Timer.After(0.5, BroadcastUntrackedQuests)
+                C_Timer.After(0.5, BroadcastTrackedAchievements)
             end
 
             -- UNTRACKED_QUESTS: apply only when it comes from the current leader.
@@ -1256,6 +1317,24 @@ frame:SetScript("OnEvent", function(self, event, ...)
                     end
                     RefreshQuestWindowIfVisible()
                     AutoSyncQuestTracking()
+                end
+            end
+
+            -- TRACKED_ACHIEVEMENTS: apply only when it comes from the current leader.
+            local achPayload = message:match("^TRACKED_ACHIEVEMENTS|(.*)$")
+            if achPayload then
+                local senderShort = ShortName(sender)
+                local leaderName = GetQuestCoopLeader()
+                local selfNameAch = ShortName(UnitName("player"))
+                if senderShort == leaderName and leaderName ~= selfNameAch then
+                    receivedTrackedAchievements = {}
+                    if achPayload ~= "" then
+                        for idStr in achPayload:gmatch("[^,]+") do
+                            local aid = tonumber(idStr)
+                            if aid then receivedTrackedAchievements[aid] = true end
+                        end
+                    end
+                    AutoSyncAchievementTracking()
                 end
             end
 
@@ -1309,3 +1388,4 @@ frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("CHAT_MSG_SYSTEM")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("QUEST_TURNED_IN")
+frame:RegisterEvent("TRACKED_ACHIEVEMENT_LIST_CHANGED")
