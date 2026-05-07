@@ -103,6 +103,14 @@ local function BroadcastLeaderPref()
     C_ChatInfo.SendAddonMessage("QuestCoop", "LEADER_PREF|" .. val, "PARTY")
 end
 
+local function BroadcastSyncReq()
+    if not IsQuestCoopActive() then return end
+    if not IsInGroup() then return end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() == selfName then return end  -- leader doesn't ask itself
+    C_ChatInfo.SendAddonMessage("QuestCoop", "QUEST_SYNC_REQ", "PARTY")
+end
+
 local function CleanupLeaderPrefs()
     local currentMembers = {}
     currentMembers[ShortName(UnitName("player"))] = true
@@ -1228,6 +1236,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
                 RefreshQuestWindowIfVisible()
             end
 
+            -- QUEST_SYNC_REQ: a (re)joining member needs a fresh QUEST_TRACK
+            if message == "QUEST_SYNC_REQ" then
+                local selfName2 = ShortName(UnitName("player"))
+                if GetQuestCoopLeader() == selfName2 then
+                    AutoSyncQuestTracking()
+                end
+            end
+
             -- QUEST_TRACK: leader's computed list of quest IDs to track
             local trackPayload = message:match("^QUEST_TRACK|(.*)$")
             if trackPayload then
@@ -1298,6 +1314,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
         if IsQuestCoopActive() then
             AutoSyncQuestTracking()
             RefreshQuestWindowIfVisible()
+            C_Timer.After(2, BroadcastSyncReq)  -- non-leaders ask leader for a fresh QUEST_TRACK
         end
     end
 end)
