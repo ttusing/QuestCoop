@@ -103,14 +103,6 @@ local function BroadcastLeaderPref()
     C_ChatInfo.SendAddonMessage("QuestCoop", "LEADER_PREF|" .. val, "PARTY")
 end
 
-local function BroadcastSyncReq()
-    if not IsQuestCoopActive() then return end
-    if not IsInGroup() then return end
-    local selfName = ShortName(UnitName("player"))
-    if GetQuestCoopLeader() == selfName then return end  -- leader doesn't ask itself
-    C_ChatInfo.SendAddonMessage("QuestCoop", "QUEST_SYNC_REQ", "PARTY")
-end
-
 local function CleanupLeaderPrefs()
     local currentMembers = {}
     currentMembers[ShortName(UnitName("player"))] = true
@@ -163,6 +155,14 @@ end
 
 local function GetEffectiveMaxTrack()
     return GetSetting("maxQuestsToTrack")
+end
+
+local function BroadcastSyncReq()
+    if not IsQuestCoopActive() then return end
+    if not IsInGroup() then return end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() == selfName then return end  -- leader doesn't ask itself
+    C_ChatInfo.SendAddonMessage("QuestCoop", "QUEST_SYNC_REQ", "PARTY")
 end
 
 local function BroadcastQuestTrackList(toTrack)
