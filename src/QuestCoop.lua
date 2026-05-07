@@ -74,8 +74,11 @@ end
 
 -- Party / leader management
 local leaderPrefs = {}
-local receivedTrackingModes = {} -- runtime only, from QuestCoop leader
-local receivedMaxTrack = nil     -- runtime only, from QuestCoop leader
+
+local function IsQuestCoopActive()
+    local _, instanceType = IsInInstance()
+    return instanceType ~= "pvp" and instanceType ~= "arena" and instanceType ~= "raid"
+end
 
 -- Quest activity timestamps for smart tracking
 local questLastActivity = {} -- [questID] = GetTime()
@@ -94,6 +97,7 @@ local RefreshQCAlertsWindow
 local RemoveQuestFromRecentlyCompleted
 
 local function BroadcastLeaderPref()
+    if not IsQuestCoopActive() then return end
     if not IsInGroup() then return end
     local val = GetSetting("alwaysLeader") and "1" or "0"
     C_ChatInfo.SendAddonMessage("QuestCoop", "LEADER_PREF|" .. val, "PARTY")
@@ -146,49 +150,40 @@ end
 
 -- Returns nil (auto), "always", or "never"
 local function GetEffectiveTrackingMode(questID)
-    local selfName = ShortName(UnitName("player"))
-    if GetQuestCoopLeader() == selfName then
-        return GetTrackingModeStore()[questID]
-    else
-        return receivedTrackingModes[questID]
-    end
+    return GetTrackingModeStore()[questID]
 end
 
 local function GetEffectiveMaxTrack()
-    local selfName = ShortName(UnitName("player"))
-    if GetQuestCoopLeader() == selfName then
-        return GetSetting("maxQuestsToTrack")
-    else
-        return receivedMaxTrack or GetSetting("maxQuestsToTrack")
-    end
+    return GetSetting("maxQuestsToTrack")
 end
 
-local function BroadcastTrackingModes()
+local function BroadcastSyncReq()
+    if not IsQuestCoopActive() then return end
+    if not IsInGroup() then return end
+    local selfName = ShortName(UnitName("player"))
+    if GetQuestCoopLeader() == selfName then return end  -- leader doesn't ask itself
+    C_ChatInfo.SendAddonMessage("QuestCoop", "QUEST_SYNC_REQ", "PARTY")
+end
+
+local function BroadcastQuestTrackList(toTrack)
+    if not IsQuestCoopActive() then return end
     if not IsInGroup() then return end
     local selfName = ShortName(UnitName("player"))
     if GetQuestCoopLeader() ~= selfName then return end
-    local store = GetTrackingModeStore()
-    local parts = {}
-    for questID, mode in pairs(store) do
-        table.insert(parts, tostring(questID) .. ":" .. mode)
+    local ids = {}
+    for questID in pairs(toTrack) do
+        table.insert(ids, tostring(questID))
     end
-    C_ChatInfo.SendAddonMessage("QuestCoop", "TRACK_MODES|" .. table.concat(parts, ","), "PARTY")
-end
-
-local function BroadcastMaxTrack()
-    if not IsInGroup() then return end
-    local selfName = ShortName(UnitName("player"))
-    if GetQuestCoopLeader() ~= selfName then return end
-    C_ChatInfo.SendAddonMessage("QuestCoop", "MAX_TRACK|" .. tostring(GetSetting("maxQuestsToTrack")), "PARTY")
+    C_ChatInfo.SendAddonMessage("QuestCoop", "QUEST_TRACK|" .. table.concat(ids, ","), "PARTY")
 end
 
 local function SetQuestTrackingMode(questID, mode)
     -- mode: nil = auto, "always", "never"
     GetTrackingModeStore()[questID] = mode
-    BroadcastTrackingModes()
 end
 
 local function BroadcastQuestCompleted(questID)
+    if not IsQuestCoopActive() then return end
     if not IsInGroup() then return end
     if not GetSetting("showWorldQuestsInRecent") and C_QuestLog.IsWorldQuest and C_QuestLog.IsWorldQuest(questID) then return end
     local title = (C_QuestLog.GetTitleForQuestID and C_QuestLog.GetTitleForQuestID(questID)) or ("Quest " .. questID)
@@ -204,7 +199,14 @@ end
 
 -- Smart quest tracking: selects up to maxQuestsToTrack quests, prioritizing
 -- always-track, campaign, recent activity, and current zone.
+-- Only the QuestCoop leader (or a solo player) runs the algorithm and applies tracking;
+-- non-leaders receive the computed list via QUEST_TRACK addon messages.
 local function AutoSyncQuestTracking()
+    if not IsQuestCoopActive() then return end
+    local selfName = ShortName(UnitName("player"))
+    local isLeader = not IsInGroup() or GetQuestCoopLeader() == selfName
+    if not isLeader then return end
+
     local currentTime = GetTime()
     local maxTrack = GetEffectiveMaxTrack()
     local currentZone = GetZoneText() or ""
@@ -270,6 +272,35 @@ local function AutoSyncQuestTracking()
 
     -- Alert for always-track quests not shared by the whole party
     if IsInGroup() then
+        -- Build set of current always-quests for O(1) lookup
+        local alwaysQuestSet = {}
+        for _, q in ipairs(alwaysQuests) do alwaysQuestSet[q.id] = true end
+
+        -- Clear stale alerts: quest no longer "always" mode, or now shared by everyone
+        local anyCleared = false
+        for questID in pairs(notSharedAlerts) do
+            if not alwaysQuestSet[questID] then
+                notSharedAlerts[questID] = nil
+                anyCleared = true
+            else
+                local sharedByAll = true
+                for i = 1, GetNumGroupMembers() do
+                    local unit = (IsInRaid() and "raid" or "party") .. i
+                    local questData = GetPartyMemberQuestData(unit, questID)
+                    if not questData or not questData.has then
+                        sharedByAll = false
+                        break
+                    end
+                end
+                if sharedByAll then
+                    notSharedAlerts[questID] = nil
+                    anyCleared = true
+                end
+            end
+        end
+        if anyCleared then RefreshQCAlertsWindow() end
+
+        -- Add new alerts for always-quests missing from some party members
         for _, q in ipairs(alwaysQuests) do
             local questID = q.id
             if not notSharedAlerts[questID] then
@@ -290,6 +321,8 @@ local function AutoSyncQuestTracking()
             end
         end
     end
+
+    BroadcastQuestTrackList(toTrack)
 end
 
 -- Forward declarations for quest window
@@ -454,7 +487,6 @@ local function CreateSettingsPanel()
         value = math.floor(value + 0.5)
         SetSetting("maxQuestsToTrack", value)
         maxTrackValueLabel:SetText(tostring(value))
-        BroadcastMaxTrack()
         AutoSyncQuestTracking()
     end)
 
@@ -1145,10 +1177,8 @@ frame:SetScript("OnEvent", function(self, event, ...)
         C_ChatInfo.RegisterAddonMessagePrefix("QuestCoop")
 
         C_Timer.After(2, function()
-            AutoSyncQuestTracking()
             BroadcastLeaderPref()
-            BroadcastTrackingModes()
-            BroadcastMaxTrack()
+            AutoSyncQuestTracking()
         end)
     end
 
@@ -1170,17 +1200,16 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "GROUP_ROSTER_UPDATE" then
         CleanupLeaderPrefs()
         C_Timer.After(1, BroadcastLeaderPref)
-        C_Timer.After(1.5, function()
-            BroadcastTrackingModes()
-            BroadcastMaxTrack()
-        end)
+        C_Timer.After(1.5, AutoSyncQuestTracking)
     end
 
-    if event == "CHAT_MSG_SYSTEM" then
+    if event == "CHAT_MSG_SYSTEM" and IsQuestCoopActive() then
         local message = ...
-        local pattern = string.gsub(ERR_QUEST_PUSH_SUCCESS_S, "%%s", "(.+)")
-        local characterName = string.match(message, pattern)
-        if characterName then
+        local ok, characterName = pcall(function()
+            local pattern = string.gsub(ERR_QUEST_PUSH_SUCCESS_S, "%%s", "(.+)")
+            return string.match(message, pattern)
+        end)
+        if ok and characterName then
             C_Timer.After(1, function()
                 AutoSyncQuestTracking()
                 RefreshQuestWindowIfVisible()
@@ -1205,43 +1234,42 @@ frame:SetScript("OnEvent", function(self, event, ...)
             if pref then
                 leaderPrefs[ShortName(sender)] = (pref == "1")
                 RefreshQuestWindowIfVisible()
-                C_Timer.After(0.5, function()
-                    BroadcastTrackingModes()
-                    BroadcastMaxTrack()
-                end)
             end
 
-            -- TRACK_MODES: replaces UNTRACKED_QUESTS
-            local trackPayload = message:match("^TRACK_MODES|(.*)$")
+            -- QUEST_SYNC_REQ: a (re)joining member needs a fresh QUEST_TRACK
+            if message == "QUEST_SYNC_REQ" then
+                local selfName2 = ShortName(UnitName("player"))
+                if GetQuestCoopLeader() == selfName2 then
+                    AutoSyncQuestTracking()
+                end
+            end
+
+            -- QUEST_TRACK: leader's computed list of quest IDs to track
+            local trackPayload = message:match("^QUEST_TRACK|(.*)$")
             if trackPayload then
                 local senderShort = ShortName(sender)
                 local leaderName = GetQuestCoopLeader()
                 local selfName2 = ShortName(UnitName("player"))
                 if senderShort == leaderName and leaderName ~= selfName2 then
-                    receivedTrackingModes = {}
-                    if trackPayload ~= "" then
-                        for entry in trackPayload:gmatch("[^,]+") do
-                            local idStr, mode = entry:match("^(%d+):(.+)$")
-                            local qid = tonumber(idStr)
-                            if qid and mode then
-                                receivedTrackingModes[qid] = mode
+                    local toTrack = {}
+                    for idStr in trackPayload:gmatch("[^,]+") do
+                        local qid = tonumber(idStr)
+                        if qid then toTrack[qid] = true end
+                    end
+                    local numEntries = C_QuestLog.GetNumQuestLogEntries()
+                    for i = 1, numEntries do
+                        local questInfo = C_QuestLog.GetInfo(i)
+                        if questInfo and not questInfo.isHeader and questInfo.questID then
+                            local questID = questInfo.questID
+                            local isTracked = C_QuestLog.GetQuestWatchType and C_QuestLog.GetQuestWatchType(questID) ~= nil
+                            if toTrack[questID] and not isTracked then
+                                if C_QuestLog.AddQuestWatch then C_QuestLog.AddQuestWatch(questID) end
+                            elseif not toTrack[questID] and isTracked then
+                                if C_QuestLog.RemoveQuestWatch then C_QuestLog.RemoveQuestWatch(questID) end
                             end
                         end
                     end
                     RefreshQuestWindowIfVisible()
-                    AutoSyncQuestTracking()
-                end
-            end
-
-            -- MAX_TRACK: leader's max quests to track setting
-            local maxTrackStr = message:match("^MAX_TRACK|(%d+)$")
-            if maxTrackStr then
-                local senderShort = ShortName(sender)
-                local leaderName = GetQuestCoopLeader()
-                local selfName2 = ShortName(UnitName("player"))
-                if senderShort == leaderName and leaderName ~= selfName2 then
-                    receivedMaxTrack = tonumber(maxTrackStr)
-                    AutoSyncQuestTracking()
                 end
             end
 
@@ -1281,6 +1309,14 @@ frame:SetScript("OnEvent", function(self, event, ...)
             end
         end
     end
+
+    if event == "PLAYER_ENTERING_WORLD" then
+        if IsQuestCoopActive() then
+            AutoSyncQuestTracking()
+            RefreshQuestWindowIfVisible()
+            C_Timer.After(2, BroadcastSyncReq)  -- non-leaders ask leader for a fresh QUEST_TRACK
+        end
+    end
 end)
 
 -- Register events
@@ -1293,3 +1329,4 @@ frame:RegisterEvent("CHAT_MSG_SYSTEM")
 frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("QUEST_TURNED_IN")
 frame:RegisterEvent("QUEST_WATCH_UPDATE")
+frame:RegisterEvent("PLAYER_ENTERING_WORLD")
